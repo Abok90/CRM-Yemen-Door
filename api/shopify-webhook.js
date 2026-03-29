@@ -79,7 +79,7 @@ async function handler(req, res) {
         customer: b.name || s.name || `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'عميل Shopify',
         phone: order.phone || b.phone || s.phone || '',
         address: s.address1 || b.address1 || '',
-        item: item.title || '',
+        item: item.variant_title ? `${item.title} - ${item.variant_title}` : (item.title || ''),
         quantity: item.quantity || 1,
         productPrice: parseFloat(order.subtotal_price || 0),
         shippingPrice: parseFloat(ship.price || 0),
