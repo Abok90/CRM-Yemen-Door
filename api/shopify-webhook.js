@@ -75,7 +75,7 @@ async function handler(req, res) {
       const ship = (order.shipping_lines || [])[0] || {};
 
       await supabaseRequest('POST', 'orders', {
-        id: `YD-${Date.now().toString(36).toUpperCase()}`,
+        id: order.name || `#${order.order_number}` || `YD-${Date.now().toString(36).toUpperCase()}`,
         customer: b.name || s.name || `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'عميل Shopify',
         phone: order.phone || b.phone || s.phone || '',
         address: s.address1 || b.address1 || '',
