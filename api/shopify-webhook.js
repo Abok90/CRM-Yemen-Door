@@ -93,10 +93,19 @@ async function handler(req, res) {
       });
       console.log(`[webhook] Inserted Yemen Door order ${order.id}`);
 
+    } else if (topic === 'orders/updated') {
+      let newStatus = null;
+      if (order.fulfillment_status === 'fulfilled') newStatus = 'الشحن';
+      else if (order.cancelled_at || order.financial_status === 'refunded') newStatus = 'الغاء';
+      if (newStatus) {
+        await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: newStatus });
+        console.log(`[webhook] Updated order ${order.id} → ${newStatus}`);
+      }
     } else if (topic === 'orders/cancelled') {
-      await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'الغا الآزبض'' });
+      await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'الغاء' });
       console.log(`[webhook] Cancelled order ${order.id}`);
     } else {
+
       console.log(`[webhook] Ignored topic: ${topic}`);
     }
   } catch (err) {
