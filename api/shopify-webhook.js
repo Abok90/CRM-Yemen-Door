@@ -45,7 +45,7 @@ async function handler(req, res) {
   console.log(`[webhook] topic=${topic} shop=${shopDomain} bytes=${rawBody.length}`);
 
   const d = shopDomain.toLowerCase();
-  const isYemenDoor = d.includes('yemens-door') || d.includes('let6t9-zg') || d.includes('jet6t9-zg') || d.includes('yemens_door');
+  const isYemenDoor = d.includes('yemens-door') || d.includes('let6t9-zg') || d.includes('let6t9_zg') || d.includes('let6t9-zg') || d.includes('let6t9zg') || d.includes('jet6t9-zg') || d.includes('yemens_door');
 
   if (!isYemenDoor) {
     console.warn(`[webhook] Unknown domain: ${shopDomain}`);
@@ -76,7 +76,7 @@ async function handler(req, res) {
 
       await supabaseRequest('POST', 'orders', {
         id: `YD-${Date.now().toString(36).toUpperCase()}`,
-        customer: b.name || s.name || `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'عمي٘ Shopify',
+        customer: b.name || s.name || `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'عميل Shopify',
         phone: order.phone || b.phone || s.phone || '',
         address: s.address1 || b.address1 || '',
         item: item.title || '',
@@ -84,8 +84,8 @@ async function handler(req, res) {
         productPrice: parseFloat(order.subtotal_price || 0),
         shippingPrice: parseFloat(ship.price || 0),
         notes: order.note || '',
-        status: 'جاري التحزيذ',
-        page: 'يمن دور وي٨,
+        status: 'جاري التحضير',
+        page: 'يمن دور ويب',
         shopify_order_id: order.id,
         shopify_store: 'yemen_door',
         source: 'shopify',
@@ -95,17 +95,16 @@ async function handler(req, res) {
 
     } else if (topic === 'orders/updated') {
       let newStatus = null;
-      if (order.fulfillment_status === 'fulfilled') newStatus = 'الشحن';
+      if (order.fulfillment_status === 'fulfilled') newStatus = 'الغحن";
       else if (order.cancelled_at || order.financial_status === 'refunded') newStatus = 'الغاء';
       if (newStatus) {
         await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: newStatus });
         console.log(`[webhook] Updated order ${order.id} → ${newStatus}`);
       }
     } else if (topic === 'orders/cancelled') {
-      await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'الغاء' });
+      await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'الغا الآزبا' });
       console.log(`[webhook] Cancelled order ${order.id}`);
     } else {
-
       console.log(`[webhook] Ignored topic: ${topic}`);
     }
   } catch (err) {

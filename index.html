@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#0f172a">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="CRM Pro">
+    <meta name="apple-mobile-web-app-title" content="يمن دور">
     <link rel="apple-touch-icon" href="https://placehold.co/192x192/0f172a/14b8a6?text=CRM">
     <link rel="manifest" href="/manifest.json">
     <script>
@@ -472,7 +472,7 @@
             const [resetPwModal, setResetPwModal] = useState({ open: false, email: '', userName: '' });
             const [publicUserNames, setPublicUserNames] = useState({});
 
-            const pages = ['عايدة', 'عايدة ويب', 'اوفر', 'اوفر ويب', 'Elite EG'];
+            const pages = ['يمن دور ويب'];
             const orderStatuses = ['جاري التحضير', 'تم', 'الشحن', 'مراجعة', 'استبدال', 'مرتجع', 'الغاء', 'تاجيل', 'اعادة ارسال', 'خارجي'];
             
             const EXPENSE_CATEGORIES = ['إعلانات عايدة', 'إعلانات اوفر', 'مرتبات مصنع', 'مرتبات اونلاين', 'سلف مصنع', 'سلف اونلاين', 'قماش', 'مستلزمات تصنيع', 'مستلزمات اونلاين', 'انتقالات', 'موديل وبلوجر', 'اشتراكات اونلاين', 'صيانه اونلاين', 'صيانه مصنع', 'اكراميات', 'مرافق مصنع', 'مرافق اونلاين', 'ايجار مصنع', 'ايجار اونلاين', 'مرتجعات', 'تعاملات قانونية', 'مرتبات خارجية', 'حساب ريهام', 'حساب شخصي', 'مرتب اسامه'];
@@ -2087,7 +2087,7 @@
                                     <IconPackage size={40} />
                                 </div>
                                 <h1 className="text-3xl font-black text-white tracking-tight">نظام المبيعات</h1>
-                                <p className="text-sky-400 font-bold text-sm mt-1 tracking-widest uppercase">CRM Pro</p>
+                                <p className="text-sky-400 font-bold text-sm mt-1 tracking-widest uppercase">يمن دور</p>
                             </div>
 
                             {/* Card */}
@@ -2198,7 +2198,7 @@
                                 </div>
                             </div>
 
-                            <p className="text-center text-slate-600 text-[11px] font-bold mt-6">© 2025 CRM Pro — جميع الحقوق محفوظة</p>
+                            <p className="text-center text-slate-600 text-[11px] font-bold mt-6">© 2025 يمن دور — جميع الحقوق محفوظة</p>
                         </div>
                     </div>
                 );
@@ -2271,7 +2271,7 @@
                         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/50" style={{background: 'linear-gradient(135deg, #0c1a2e 0%, #0f2643 100%)'}}>
                             <div className="flex items-center gap-3">
                                 <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{background: 'rgba(14,165,233,0.2)'}}><IconPackage size={20} /></div>
-                                <div><div className="font-black text-sm text-white leading-tight">نظام المبيعات</div><div className="text-[10px] text-sky-400 font-bold">CRM Pro</div></div>
+                                <div><div className="font-black text-sm text-white leading-tight">نظام المبيعات</div><div className="text-[10px] text-sky-400 font-bold">يمن دور</div></div>
                             </div>
                             <button className="md:hidden text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-colors" onClick={() => setIsSidebarOpen(false)}><IconX size={18}/></button>
                         </div>
@@ -2298,7 +2298,7 @@
                             <button onClick={() => {setCurrentTab('orders'); setIsSidebarOpen(false);}} className={`sidebar-nav-item ${currentTab === 'orders' ? 'active' : ''}`}><IconCart /> <span>الطلبات والمتابعة</span></button>
                             {isSuperAdmin && <button onClick={() => {setCurrentTab('pages'); setIsSidebarOpen(false);}} className={`sidebar-nav-item ${currentTab === 'pages' ? 'active' : ''}`}><IconStore /> <span>إحصائيات الصفحات</span></button>}
                             {canAccessFinance && <button onClick={() => {setCurrentTab('finance'); setIsSidebarOpen(false);}} className={`sidebar-nav-item ${currentTab === 'finance' ? 'active' : ''}`}><IconCalc /> <span>الحسابات المالية</span></button>}
-                            {isSuperAdmin && <button onClick={() => {setCurrentTab('factory'); setIsSidebarOpen(false);}} className={`sidebar-nav-item ${currentTab === 'factory' ? 'active' : ''}`}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7-7H4a2 2 0 0 0-2 2v10"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M8 18v-1"/><path d="M16 18v-3"/></svg> <span>حسابات المصنع</span></button>}
+                            {false && <button onClick={() => {setCurrentTab('factory'); setIsSidebarOpen(false);}} className={`sidebar-nav-item ${currentTab === 'factory' ? 'active' : ''}`}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7-7H4a2 2 0 0 0-2 2v10"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M8 18v-1"/><path d="M16 18v-3"/></svg> <span>حسابات المصنع</span></button>}
                             {isSuperAdmin && <button onClick={() => {setCurrentTab('products'); setIsSidebarOpen(false);}} className={`sidebar-nav-item ${currentTab === 'products' ? 'active' : ''}`}><IconStore /> <span>إدارة المنتجات</span></button>}
                             {(isSuperAdmin || isPageManager) && <button onClick={() => {setCurrentTab('inventory'); setIsSidebarOpen(false);}} className={`sidebar-nav-item ${currentTab === 'inventory' ? 'active' : ''}`}><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/><path d="M9 12h6"/><path d="M9 16h4"/></svg> <span>الجرد</span></button>}
                             {(isSuperAdmin || isPageManager) && (<>
