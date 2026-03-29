@@ -1,0 +1,12 @@
+{
+  "name": "crm-yemen-door",
+  "version": "1.0.0",
+  "description": "CRM Yemen Door",
+  "private": true,
+  "scripts": {
+    "build": "echo 'No build step required'"
+  },
+  "dependencies": {
+    "@vercel/speed-insights": "^1.0.12"
+  }
+}
