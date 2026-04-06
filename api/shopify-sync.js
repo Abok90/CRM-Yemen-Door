@@ -154,23 +154,20 @@ async function handler(req, res) {
     let orders = [];
 
     if (mode === 'debug') {
-      // وضع التشخيص: يرجع البيانات الخام لآخر أوردر
-      const { orders: found } = await fetchShopifyOrders(storeUrl, token, `status=any&limit=1&order=created_at+desc`);
-      const o = (found || [])[0];
-      if (!o) return res.status(200).json({ ok: false, error: 'لا توجد أوردرات في Shopify' });
-      return res.status(200).json({
-        ok: true,
-        debug: {
-          id: o.id,
-          name: o.name,
-          phone: o.phone,
-          customer: o.customer ? { first_name: o.customer.first_name, last_name: o.customer.last_name, phone: o.customer.phone, email: o.customer.email } : null,
-          billing_address: o.billing_address,
-          shipping_address: o.shipping_address,
-          note_attributes: o.note_attributes,
-          line_items_count: (o.line_items || []).length,
-        }
-      });
+      // وضع التشخيص: يرجع البيانات الخام
+      const orderName = String(body.orderName || '').replace('#', '').trim();
+      let o;
+      if (orderName) {
+        const { orders: found } = await fetchShopifyOrders(storeUrl, token, `status=any&name=${encodeURIComponent('#' + orderName)}&limit=5`);
+        o = (found || [])[0];
+      } else {
+        const { orders: found } = await fetchShopifyOrders(storeUrl, token, `status=any&limit=1&order=created_at+desc`);
+        o = (found || [])[0];
+      }
+      if (!o) return res.status(200).json({ ok: false, error: 'لا توجد أوردرات' });
+      // رجّع الأوردر كامل بدون line_items عشان ما يكونش كبير
+      const { line_items, ...orderWithoutItems } = o;
+      return res.status(200).json({ ok: true, debug: orderWithoutItems, line_items_count: (line_items || []).length });
     }
 
     if (mode === 'specific') {
