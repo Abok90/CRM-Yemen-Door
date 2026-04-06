@@ -1701,6 +1701,13 @@
                         body: JSON.stringify({ mode, ...extra }),
                     });
                     const result = await res.json();
+                    if (mode === 'debug') {
+                        // عرض البيانات الخام في console للتشخيص
+                        console.log('[Shopify Debug]', JSON.stringify(result.debug, null, 2));
+                        notify('تم جلب بيانات التشخيص - افتح Console (F12) وابحث عن [Shopify Debug]', 'success');
+                        setLoadingDB(false);
+                        return;
+                    }
                     if (result.ok) {
                         const parts = [];
                         if (result.inserted) parts.push(`أُضيف ${result.inserted}`);
@@ -2342,7 +2349,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.39</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.40</span>
                             </div>
                         </nav>
                     </aside>
@@ -3927,6 +3934,8 @@
                                     <p className="text-xs text-slate-500">يصلح بيانات الموجود ويضيف الناقص من آخر 50 أوردر.</p>
                                     <button onClick={() => handleShopifySync('update', { limit: 50 })} className="w-full bg-slate-700 hover:bg-slate-800 text-white font-bold py-2 rounded-lg text-sm transition-colors">تشغيل</button>
                                 </div>
+                                {/* تشخيص */}
+                                <button onClick={() => handleShopifySync('debug')} className="w-full text-xs text-slate-400 hover:text-slate-600 py-1 underline">🔧 تشخيص (فحص بيانات Shopify)</button>
                             </div>
                         </div>
                     )}
