@@ -1702,9 +1702,25 @@
                     });
                     const result = await res.json();
                     if (mode === 'debug') {
-                        // عرض البيانات الخام في console للتشخيص
                         console.log('[Shopify Debug]', JSON.stringify(result.debug, null, 2));
-                        notify('تم جلب بيانات التشخيص - افتح Console (F12) وابحث عن [Shopify Debug]', 'success');
+                        const d = result.debug || {};
+                        const b = d.billing_address || {};
+                        const s = d.shipping_address || {};
+                        const c = d.customer || {};
+                        const info = [
+                            `📦 أوردر: ${d.name}`,
+                            `👤 billing.name: ${b.name || '❌ فاضي'}`,
+                            `👤 shipping.name: ${s.name || '❌ فاضي'}`,
+                            `👤 customer.first_name: ${c.first_name || '❌ فاضي'}`,
+                            `📱 order.phone: ${d.phone || '❌ فاضي'}`,
+                            `📱 customer.phone: ${c.phone || '❌ فاضي'}`,
+                            `📱 billing.phone: ${b.phone || '❌ فاضي'}`,
+                            `📱 shipping.phone: ${s.phone || '❌ فاضي'}`,
+                            `📍 shipping.address1: ${s.address1 || '❌ فاضي'}`,
+                            `📍 billing.address1: ${b.address1 || '❌ فاضي'}`,
+                            `📌 note_attributes: ${JSON.stringify(d.note_attributes || [])}`,
+                        ].join('\n');
+                        alert(info);
                         setLoadingDB(false);
                         return;
                     }
@@ -2349,7 +2365,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.40</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.41</span>
                             </div>
                         </nav>
                     </aside>
@@ -3935,7 +3951,7 @@
                                     <button onClick={() => handleShopifySync('update', { limit: 50 })} className="w-full bg-slate-700 hover:bg-slate-800 text-white font-bold py-2 rounded-lg text-sm transition-colors">تشغيل</button>
                                 </div>
                                 {/* تشخيص */}
-                                <button onClick={() => handleShopifySync('debug')} className="w-full text-xs text-slate-400 hover:text-slate-600 py-1 underline">🔧 تشخيص (فحص بيانات Shopify)</button>
+                                <button onClick={() => handleShopifySync('debug', shopifySyncOrderName.trim() ? { orderName: shopifySyncOrderName.trim() } : {})} className="w-full text-xs text-slate-400 hover:text-slate-600 py-1 underline">🔧 تشخيص (لو كتبت رقم أوردر بيجيب بياناته الخام)</button>
                             </div>
                         </div>
                     )}
