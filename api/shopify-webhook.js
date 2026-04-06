@@ -95,8 +95,10 @@ async function handler(req, res) {
 
     } else if (topic === 'orders/updated') {
       let newStatus = null;
+      const tags = (order.tags || '').split(',').map(t => t.trim().toLowerCase());
       if (order.fulfillment_status === 'fulfilled') newStatus = 'الشحن';
-      else if (order.cancelled_at || order.financial_status === 'refunded') newStatus = 'الغاء';
+      else if (tags.includes('collected')) newStatus = 'تم';
+      else if (tags.includes('cancelled_order') || order.cancelled_at || order.financial_status === 'refunded') newStatus = 'الغاء';
       if (newStatus) {
         await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: newStatus });
         console.log(`[webhook] Updated order ${order.id} → ${newStatus}`);
