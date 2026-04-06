@@ -28,7 +28,6 @@ async function supabaseRequest(method, path, body) {
 async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  // التحقق من الجلسة
   const authToken = req.headers['x-crm-auth'] || '';
   if (!authToken) return res.status(401).json({ error: 'Unauthorized' });
   const authRes = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
@@ -42,8 +41,13 @@ async function handler(req, res) {
 
   let limit = 14;
   try {
-    const raw = await req.text?.() || '';
-    const body = JSON.parse(raw || '{}');
+    const chunks = [];
+    await new Promise((resolve, reject) => {
+      req.on('data', c => chunks.push(c));
+      req.on('end', resolve);
+      req.on('error', reject);
+    });
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
     if (body.limit) limit = Math.min(Number(body.limit) || 14, 50);
   } catch {}
 
@@ -56,58 +60,72 @@ async function handler(req, res) {
     if (!shopifyRes.ok) throw new Error(`Shopify API error: ${shopifyRes.status}`);
     const { orders } = await shopifyRes.json();
 
-    let inserted = 0, deleted = 0;
+    let updated = 0, skipped = 0;
 
     for (const order of orders) {
       const b = order.billing_address || {};
       const s = order.shipping_address || {};
       const lineItems = order.line_items || [];
       const ship = (order.shipping_lines || [])[0] || {};
-      const baseId = order.name || `#${order.order_number}`;
-      const customer = b.name || s.name || `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'عميل Shopify';
       const phone = normalizePhone(order.phone || b.phone || s.phone || '');
-      const address = s.address1 || b.address1 || '';
+
+      // دمج كل المنتجات في سطر واحد
+      const itemText = lineItems.map(it => {
+        const name = it.variant_title ? `${it.title} - ${it.variant_title}` : it.title;
+        return it.quantity > 1 ? `${name} ×${it.quantity}` : name;
+      }).join('\n');
+      const totalQty = lineItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
+      const totalPrice = lineItems.reduce((sum, it) => sum + parseFloat(it.price || 0) * (it.quantity || 1), 0);
       const shippingPrice = parseFloat(ship.price || 0);
-      const notes = order.note || '';
-      const date = new Date(order.created_at).toLocaleDateString('ar-EG');
 
-      // تحديد الحالة الحالية في السيستم قبل الحذف
-      let currentStatus = 'جاري التحضير';
-      try {
-        const existing = await supabaseRequest('GET', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door&select=status&limit=1`);
-        if (existing && existing.length > 0) currentStatus = existing[0].status || 'جاري التحضير';
-      } catch {}
+      // تحديث الأوردرات الموجودة بنفس shopify_order_id (سواء كانت #1000 أو #1000-1 #1000-2 إلخ)
+      const existing = await supabaseRequest('GET',
+        `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door&select=id`
+      );
 
-      // حذف الأوردرات القديمة الخاطئة
-      await supabaseRequest('DELETE', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`);
-      deleted++;
+      if (!existing || existing.length === 0) {
+        skipped++;
+        continue;
+      }
 
-      // إعادة الإدخال الصحيح - أوردر لكل منتج
-      for (let i = 0; i < lineItems.length; i++) {
-        const item = lineItems[i];
-        const orderId = lineItems.length > 1 ? `${baseId}-${i + 1}` : baseId;
+      if (existing.length === 1) {
+        // أوردر واحد: تحديث البيانات مباشرة
+        await supabaseRequest('PATCH',
+          `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`,
+          { phone, item: itemText, quantity: totalQty, productPrice: totalPrice, shippingPrice }
+        );
+        updated++;
+      } else {
+        // أكثر من أوردر مرتبط (الأوردرات المنفصلة القديمة #1000-1 #1000-2):
+        // احذفهم وأدخل أوردر واحد صح
+        const currentStatus = existing[0]?.status || 'جاري التحضير';
+        const orderId = order.name || `#${order.order_number}`;
+        const customer = b.name || s.name || `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'عميل Shopify';
+        const address = s.address1 || b.address1 || '';
+
+        await supabaseRequest('DELETE',
+          `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`
+        );
         await supabaseRequest('POST', 'orders', {
           id: orderId,
-          customer,
-          phone,
-          address,
-          item: item.variant_title ? `${item.title} - ${item.variant_title}` : (item.title || ''),
-          quantity: item.quantity || 1,
-          productPrice: parseFloat(item.price || 0) * (item.quantity || 1),
-          shippingPrice: i === 0 ? shippingPrice : 0,
-          notes,
+          customer, phone, address,
+          item: itemText,
+          quantity: totalQty,
+          productPrice: totalPrice,
+          shippingPrice,
+          notes: order.note || '',
           status: currentStatus,
           page: 'يمن دور ويب',
           shopify_order_id: order.id,
           shopify_store: 'yemen_door',
           source: 'shopify',
-          date,
+          date: new Date(order.created_at).toLocaleDateString('ar-EG'),
         });
-        inserted++;
+        updated++;
       }
     }
 
-    return res.status(200).json({ ok: true, orders: orders.length, deleted, inserted });
+    return res.status(200).json({ ok: true, orders: orders.length, updated, skipped });
   } catch (err) {
     console.error(`[sync] Error: ${err.message}`);
     return res.status(200).json({ ok: false, error: err.message });
