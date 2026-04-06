@@ -18,19 +18,138 @@ function verifyHmac(rawBody, receivedHmac, secret) {
   } catch { return false; }
 }
 
+// تحويل الموبايل: إزالة +20 أو 0020 والحفاظ على صيغة 01xxxxxxxxx
+function normalizePhone(raw) {
+  if (!raw) return '';
+  let p = raw.replace(/[\s\-\(\)\.]/g, '');
+  if (p.startsWith('+20')) p = '0' + p.slice(3);
+  else if (p.startsWith('0020')) p = '0' + p.slice(4);
+  else if (p.startsWith('+2')) p = '0' + p.slice(2);
+  return p;
+}
+
 async function supabaseRequest(method, path, body) {
+  const headers = {
+    'Content-Type': 'application/json',
+    apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+    Prefer: 'return=minimal',
+  };
   const res = await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-      Prefer: 'return=minimal',
-    },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) throw new Error(`Supabase ${method} failed: ${res.status} — ${await res.text()}`);
 }
+
+async function handler(req, res) {
+  if (req.method !== 'POST') return res.status(405).end();
+
+  const rawBody = await readRawBody(req).catch(() => null);
+  if (!rawBody) return res.status(400).json({ error: 'Failed to read body' });
+
+  const shopDomain = req.headers['x-shopify-shop-domain'] || '';
+  const receivedHmac = req.headers['x-shopify-hmac-sha256'] || '';
+  const topic = req.headers['x-shopify-topic'] || '';
+
+  console.log(`[webhook] topic=${topic} shop=${shopDomain} bytes=${rawBody.length}`);
+
+  const d = shopDomain.toLowerCase();
+  const isYemenDoor = d.includes('yemens-door') || d.includes('jet6t9-zg') || d.includes('yemens_door');
+
+  if (!isYemenDoor) {
+    console.warn(`[webhook] Unknown domain: ${shopDomain}`);
+    return res.status(200).json({ ok: true });
+  }
+
+  const secret = process.env.SHOPIFY_WEBHOOK_SECRET;
+  if (!secret) {
+    console.error('[webhook] Missing SHOPIFY_WEBHOOK_SECRET');
+    return res.status(500).json({ error: 'Server misconfigured' });
+  }
+
+  if (!verifyHmac(rawBody, receivedHmac, secret)) {
+    console.warn(`[webhook] HMAC failed for ${shopDomain}`);
+    return res.status(401).json({ error: 'Invalid HMAC' });
+  }
+
+  let order;
+  try { order = JSON.parse(rawBody.toString('utf8')); }
+  catch { return res.status(400).json({ error: 'Invalid JSON' }); }
+
+  try {
+    if (topic === 'orders/create') {
+      const b = order.billing_address || {};
+      const s = order.shipping_address || {};
+      const lineItems = order.line_items || [];
+      const ship = (order.shipping_lines || [])[0] || {};
+      const baseId = order.name || `#${order.order_number}`;
+      const customer = b.name || s.name || `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'عميل Shopify';
+      const phone = normalizePhone(order.phone || b.phone || s.phone || '');
+      const address = s.address1 || b.address1 || '';
+      const shippingPrice = parseFloat(ship.price || 0);
+      const notes = order.note || '';
+      const date = new Date().toLocaleDateString('ar-EG');
+
+      // أوردر منفصل لكل منتج في الطلب
+      for (let i = 0; i < lineItems.length; i++) {
+        const item = lineItems[i];
+        const orderId = lineItems.length > 1 ? `${baseId}-${i + 1}` : baseId;
+        await supabaseRequest('POST', 'orders', {
+          id: orderId,
+          customer,
+          phone,
+          address,
+          item: item.variant_title ? `${item.title} - ${item.variant_title}` : (item.title || ''),
+          quantity: item.quantity || 1,
+          productPrice: parseFloat(item.price || 0) * (item.quantity || 1),
+          shippingPrice: i === 0 ? shippingPrice : 0,
+          notes,
+          status: 'جاري التحضير',
+          page: 'يمن دور ويب',
+          shopify_order_id: order.id,
+          shopify_store: 'yemen_door',
+          source: 'shopify',
+          date,
+        });
+      }
+      console.log(`[webhook] Inserted ${lineItems.length} item(s) for order ${order.id}`);
+
+    } else if (topic === 'orders/paid') {
+      await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'تم' });
+      console.log(`[webhook] Order paid ${order.id} → تم`);
+
+    } else if (topic === 'orders/fulfilled') {
+      await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'الشحن' });
+      console.log(`[webhook] Order fulfilled ${order.id} → الشحن`);
+
+    } else if (topic === 'orders/updated') {
+      let newStatus = null;
+      const tags = (order.tags || '').split(',').map(t => t.trim().toLowerCase());
+      if (tags.includes('collected')) newStatus = 'تم';
+      else if (tags.includes('cancelled_order') || order.cancelled_at || order.financial_status === 'refunded') newStatus = 'الغاء';
+      else if (order.fulfillment_status === 'fulfilled') newStatus = 'الشحن';
+      if (newStatus) {
+        await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: newStatus });
+        console.log(`[webhook] Updated order ${order.id} → ${newStatus}`);
+      }
+    } else if (topic === 'orders/cancelled') {
+      await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'الغاء' });
+      console.log(`[webhook] Cancelled order ${order.id}`);
+    } else {
+      console.log(`[webhook] Ignored topic: ${topic}`);
+    }
+  } catch (err) {
+    console.error(`[webhook] Error: ${err.message}`);
+    return res.status(200).json({ ok: false, error: err.message });
+  }
+
+  return res.status(200).json({ ok: true });
+}
+
+module.exports = handler;
+module.exports.config = { api: { bodyParser: false } };
 
 async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
