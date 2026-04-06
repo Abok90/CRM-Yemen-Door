@@ -28,6 +28,55 @@ function normalizePhone(raw) {
   return p;
 }
 
+// البحث في note_attributes عن قيمة بأكثر من اسم ممكن
+function findNoteAttr(noteAttrs, keys) {
+  if (!noteAttrs || !noteAttrs.length) return '';
+  for (const key of keys) {
+    const found = noteAttrs.find(a => a.name && a.name.toLowerCase().includes(key.toLowerCase()));
+    if (found && found.value) return found.value.trim();
+  }
+  return '';
+}
+
+// استخراج كل بيانات العميل من أي مكان ممكن في أوردر Shopify
+function extractOrderCustomer(order) {
+  const b = order.billing_address || {};
+  const s = order.shipping_address || {};
+  const c = order.customer || {};
+  const d = c.default_address || {};
+  const noteAttrs = order.note_attributes || [];
+
+  // الاسم: ندور في كل الأماكن الممكنة
+  const customer =
+    s.name ||
+    b.name ||
+    (s.first_name ? `${s.first_name} ${s.last_name || ''}`.trim() : '') ||
+    (b.first_name ? `${b.first_name} ${b.last_name || ''}`.trim() : '') ||
+    d.name ||
+    (d.first_name ? `${d.first_name} ${d.last_name || ''}`.trim() : '') ||
+    (c.first_name ? `${c.first_name} ${c.last_name || ''}`.trim() : '') ||
+    findNoteAttr(noteAttrs, ['name', 'اسم', 'الاسم', 'customer']) ||
+    'عميل Shopify';
+
+  // الموبايل: ندور في كل الأماكن الممكنة
+  const phone = normalizePhone(
+    s.phone || b.phone || order.phone || c.phone || d.phone ||
+    findNoteAttr(noteAttrs, ['phone', 'mobile', 'موبايل', 'الموبايل', 'هاتف', 'رقم']) ||
+    ''
+  );
+
+  // العنوان: ندور في كل الأماكن الممكنة
+  const address =
+    s.address1 || b.address1 || d.address1 ||
+    (s.city ? `${s.city}${s.province ? ' - ' + s.province : ''}` : '') ||
+    (b.city ? `${b.city}${b.province ? ' - ' + b.province : ''}` : '') ||
+    d.city ||
+    findNoteAttr(noteAttrs, ['address', 'عنوان', 'العنوان', 'المنطقة']) ||
+    '';
+
+  return { customer, phone, address };
+}
+
 async function supabaseRequest(method, path, body) {
   const headers = {
     'Content-Type': 'application/json',
@@ -80,14 +129,10 @@ async function handler(req, res) {
 
   try {
     if (topic === 'orders/create') {
-      const b = order.billing_address || {};
-      const s = order.shipping_address || {};
       const lineItems = order.line_items || [];
       const ship = (order.shipping_lines || [])[0] || {};
       const orderId = order.name || `#${order.order_number}`;
-      const customer = b.name || s.name || `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'عميل Shopify';
-      const phone = normalizePhone(order.phone || b.phone || s.phone || '');
-      const address = s.address1 || b.address1 || '';
+      const { customer, phone, address } = extractOrderCustomer(order);
       const shippingPrice = parseFloat(ship.price || 0);
 
       // دمج كل المنتجات في سطر واحد

@@ -9,25 +9,46 @@ function normalizePhone(raw) {
   return p;
 }
 
-// استخراج بيانات العميل من كل الحقول الممكنة في Shopify
+function findNoteAttr(noteAttrs, keys) {
+  if (!noteAttrs || !noteAttrs.length) return '';
+  for (const key of keys) {
+    const found = noteAttrs.find(a => a.name && a.name.toLowerCase().includes(key.toLowerCase()));
+    if (found && found.value) return found.value.trim();
+  }
+  return '';
+}
+
 function extractCustomer(order) {
   const b = order.billing_address || {};
   const s = order.shipping_address || {};
   const c = order.customer || {};
+  const d = c.default_address || {};
+  const noteAttrs = order.note_attributes || [];
 
   const customer =
-    b.name ||
-    (b.first_name ? `${b.first_name} ${b.last_name || ''}`.trim() : '') ||
     s.name ||
+    b.name ||
     (s.first_name ? `${s.first_name} ${s.last_name || ''}`.trim() : '') ||
+    (b.first_name ? `${b.first_name} ${b.last_name || ''}`.trim() : '') ||
+    d.name ||
+    (d.first_name ? `${d.first_name} ${d.last_name || ''}`.trim() : '') ||
     (c.first_name ? `${c.first_name} ${c.last_name || ''}`.trim() : '') ||
+    findNoteAttr(noteAttrs, ['name', 'اسم', 'الاسم', 'customer']) ||
     'عميل Shopify';
 
   const phone = normalizePhone(
-    order.phone || c.phone || b.phone || s.phone || ''
+    s.phone || b.phone || order.phone || c.phone || d.phone ||
+    findNoteAttr(noteAttrs, ['phone', 'mobile', 'موبايل', 'الموبايل', 'هاتف', 'رقم']) ||
+    ''
   );
 
-  const address = s.address1 || b.address1 || s.city || b.city || '';
+  const address =
+    s.address1 || b.address1 || d.address1 ||
+    (s.city ? `${s.city}${s.province ? ' - ' + s.province : ''}` : '') ||
+    (b.city ? `${b.city}${b.province ? ' - ' + b.province : ''}` : '') ||
+    d.city ||
+    findNoteAttr(noteAttrs, ['address', 'عنوان', 'العنوان', 'المنطقة']) ||
+    '';
 
   return { customer, phone, address };
 }
