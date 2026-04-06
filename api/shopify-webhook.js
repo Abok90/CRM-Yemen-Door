@@ -93,6 +93,16 @@ async function handler(req, res) {
       });
       console.log(`[webhook] Inserted Yemen Door order ${order.id}`);
 
+    } else if (topic === 'orders/paid') {
+      // capture payment → تم
+      await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'تم' });
+      console.log(`[webhook] Order paid ${order.id} → تم`);
+
+    } else if (topic === 'orders/fulfilled') {
+      // order fulfilled → الشحن
+      await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'الشحن' });
+      console.log(`[webhook] Order fulfilled ${order.id} → الشحن`);
+
     } else if (topic === 'orders/updated') {
       let newStatus = null;
       const tags = (order.tags || '').split(',').map(t => t.trim().toLowerCase());
