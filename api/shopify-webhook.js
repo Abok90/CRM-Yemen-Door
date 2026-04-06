@@ -84,37 +84,38 @@ async function handler(req, res) {
       const s = order.shipping_address || {};
       const lineItems = order.line_items || [];
       const ship = (order.shipping_lines || [])[0] || {};
-      const baseId = order.name || `#${order.order_number}`;
+      const orderId = order.name || `#${order.order_number}`;
       const customer = b.name || s.name || `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'عميل Shopify';
       const phone = normalizePhone(order.phone || b.phone || s.phone || '');
       const address = s.address1 || b.address1 || '';
       const shippingPrice = parseFloat(ship.price || 0);
-      const notes = order.note || '';
-      const date = new Date().toLocaleDateString('ar-EG');
 
-      // أوردر منفصل لكل منتج في الطلب
-      for (let i = 0; i < lineItems.length; i++) {
-        const item = lineItems[i];
-        const orderId = lineItems.length > 1 ? `${baseId}-${i + 1}` : baseId;
-        await supabaseRequest('POST', 'orders', {
-          id: orderId,
-          customer,
-          phone,
-          address,
-          item: item.variant_title ? `${item.title} - ${item.variant_title}` : (item.title || ''),
-          quantity: item.quantity || 1,
-          productPrice: parseFloat(item.price || 0) * (item.quantity || 1),
-          shippingPrice: i === 0 ? shippingPrice : 0,
-          notes,
-          status: 'جاري التحضير',
-          page: 'يمن دور ويب',
-          shopify_order_id: order.id,
-          shopify_store: 'yemen_door',
-          source: 'shopify',
-          date,
-        });
-      }
-      console.log(`[webhook] Inserted ${lineItems.length} item(s) for order ${order.id}`);
+      // دمج كل المنتجات في سطر واحد
+      const itemText = lineItems.map(it => {
+        const name = it.variant_title ? `${it.title} - ${it.variant_title}` : it.title;
+        return it.quantity > 1 ? `${name} ×${it.quantity}` : name;
+      }).join('\n');
+      const totalQty = lineItems.reduce((s, it) => s + (it.quantity || 1), 0);
+      const totalPrice = lineItems.reduce((s, it) => s + parseFloat(it.price || 0) * (it.quantity || 1), 0);
+
+      await supabaseRequest('POST', 'orders', {
+        id: orderId,
+        customer,
+        phone,
+        address,
+        item: itemText,
+        quantity: totalQty,
+        productPrice: totalPrice,
+        shippingPrice,
+        notes: order.note || '',
+        status: 'جاري التحضير',
+        page: 'يمن دور ويب',
+        shopify_order_id: order.id,
+        shopify_store: 'yemen_door',
+        source: 'shopify',
+        date: new Date().toLocaleDateString('ar-EG'),
+      });
+      console.log(`[webhook] Inserted order ${orderId} with ${lineItems.length} item(s)`);
 
     } else if (topic === 'orders/paid') {
       await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'تم' });
