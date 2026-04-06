@@ -147,20 +147,38 @@ async function handler(req, res) {
     body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
   } catch {}
 
-  const mode = body.mode || 'update'; // 'update' | 'missing' | 'specific'
+  const mode = body.mode || 'update'; // 'update' | 'missing' | 'specific' | 'debug'
   const counts = { inserted: 0, updated: 0, merged: 0, skipped: 0 };
 
   try {
     let orders = [];
 
+    if (mode === 'debug') {
+      // وضع التشخيص: يرجع البيانات الخام لآخر أوردر
+      const { orders: found } = await fetchShopifyOrders(storeUrl, token, `status=any&limit=1&order=created_at+desc`);
+      const o = (found || [])[0];
+      if (!o) return res.status(200).json({ ok: false, error: 'لا توجد أوردرات في Shopify' });
+      return res.status(200).json({
+        ok: true,
+        debug: {
+          id: o.id,
+          name: o.name,
+          phone: o.phone,
+          customer: o.customer ? { first_name: o.customer.first_name, last_name: o.customer.last_name, phone: o.customer.phone, email: o.customer.email } : null,
+          billing_address: o.billing_address,
+          shipping_address: o.shipping_address,
+          note_attributes: o.note_attributes,
+          line_items_count: (o.line_items || []).length,
+        }
+      });
+    }
+
     if (mode === 'specific') {
-      // مزامنة أوردر واحد برقمه
       const orderName = String(body.orderName || '').replace('#', '').trim();
       if (!orderName) return res.status(400).json({ error: 'orderName مطلوب' });
       const { orders: found } = await fetchShopifyOrders(storeUrl, token, `status=any&name=${encodeURIComponent('#' + orderName)}&limit=5`);
       orders = found || [];
     } else {
-      // مزامنة الناقصة أو آخر N أوردر
       const limit = Math.min(Number(body.limit) || 250, 250);
       const { orders: found } = await fetchShopifyOrders(storeUrl, token, `status=any&limit=${limit}&order=created_at+desc`);
       orders = found || [];
