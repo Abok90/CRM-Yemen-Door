@@ -1687,6 +1687,28 @@
                 } catch(e) { notify("خطأ: " + e.message); } finally { setLoadingDB(false); }
             };
 
+            const handleShopifySync = async (limit = 14) => {
+                if (!window.confirm(`هتعيد مزامنة آخر ${limit} أوردر من Shopify وتصلح الموبايل والمنتجات؟`)) return;
+                setLoadingDB(true);
+                try {
+                    const { data: { session } } = await supabase.auth.getSession();
+                    const authToken = session?.access_token || '';
+                    const res = await fetch('/api/shopify-sync', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-crm-auth': authToken },
+                        body: JSON.stringify({ limit }),
+                    });
+                    const result = await res.json();
+                    if (result.ok) {
+                        notify(`تمت المزامنة: ${result.orders} أوردر، أضيف ${result.inserted} سجل`, 'success');
+                        fetchOrders();
+                    } else {
+                        notify('خطأ في المزامنة: ' + result.error);
+                    }
+                } catch (e) { notify('خطأ: ' + e.message); }
+                finally { setLoadingDB(false); }
+            };
+
             const deleteProduct = async (id) => {
                 if(!window.confirm("متأكد من حذف المنتج؟")) return;
                 // Delete storage image if it belongs to our bucket
@@ -2314,7 +2336,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.34</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.35</span>
                             </div>
                         </nav>
                     </aside>
@@ -2562,6 +2584,8 @@
                                                 <input type="checkbox" className="custom-checkbox pointer-events-none" style={{width:'14px',height:'14px'}} checked={displayedOrders.length > 0 && selectedOrders.length === displayedOrders.length} readOnly />
                                                 <span>تحديد الكل</span>
                                             </button>
+                                            {/* زر مزامنة Shopify - SuperAdmin فقط */}
+                                            {isSuperAdmin && <button onClick={() => handleShopifySync(14)} className="flex items-center gap-1 px-2 py-1.5 rounded-lg font-bold text-xs border bg-white hover:bg-green-50 border-slate-200 text-green-700 transition-colors" title="إعادة مزامنة آخر 14 أوردر من Shopify وتصحيح الموبايل والمنتجات">🔄 Shopify</button>}
                                             {/* أزرار التصدير والحذف عند التحديد */}
                                             {selectedOrders.length > 0 && (<>
                                                 <button onClick={() => runBulkAction(exportSelectedToCSV)} className="flex items-center gap-1 bg-green-600 hover:bg-green-700 text-white px-2 py-1.5 rounded-lg font-bold text-xs shadow transition-colors"><IconDownload size={12} /> إكسيل</button>
