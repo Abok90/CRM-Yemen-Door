@@ -1700,7 +1700,7 @@
                     });
                     const result = await res.json();
                     if (result.ok) {
-                        notify(`تمت المزامنة: ${result.orders} أوردر، حُدّث ${result.updated} سجل`, 'success');
+                        notify(`تمت المزامنة: حُدّث ${result.updated || 0}، أُضيف ${result.inserted || 0} من ${result.orders} أوردر`, 'success');
                         fetchOrdersData();
                     } else {
                         notify('خطأ في المزامنة: ' + result.error);
@@ -2336,7 +2336,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.37</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.38</span>
                             </div>
                         </nav>
                     </aside>

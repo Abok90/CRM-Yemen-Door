@@ -60,7 +60,7 @@ async function handler(req, res) {
     if (!shopifyRes.ok) throw new Error(`Shopify API error: ${shopifyRes.status}`);
     const { orders } = await shopifyRes.json();
 
-    let updated = 0, skipped = 0;
+    let updated = 0, inserted = 0;
 
     for (const order of orders) {
       const b = order.billing_address || {};
@@ -68,6 +68,9 @@ async function handler(req, res) {
       const lineItems = order.line_items || [];
       const ship = (order.shipping_lines || [])[0] || {};
       const phone = normalizePhone(order.phone || b.phone || s.phone || '');
+      const orderId = order.name || `#${order.order_number}`;
+      const customer = b.name || s.name || `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'عميل Shopify';
+      const address = s.address1 || b.address1 || '';
 
       // دمج كل المنتجات في سطر واحد
       const itemText = lineItems.map(it => {
@@ -77,55 +80,52 @@ async function handler(req, res) {
       const totalQty = lineItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
       const totalPrice = lineItems.reduce((sum, it) => sum + parseFloat(it.price || 0) * (it.quantity || 1), 0);
       const shippingPrice = parseFloat(ship.price || 0);
+      const date = new Date(order.created_at).toLocaleDateString('ar-EG');
+      const notes = order.note || '';
 
-      // تحديث الأوردرات الموجودة بنفس shopify_order_id (سواء كانت #1000 أو #1000-1 #1000-2 إلخ)
       const existing = await supabaseRequest('GET',
-        `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door&select=id`
+        `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door&select=id,status`
       );
 
       if (!existing || existing.length === 0) {
-        skipped++;
-        continue;
-      }
+        // الأوردر مش موجود في السيستم → أضفه من جديد
+        // تحديد الحالة من Shopify
+        let status = 'جاري التحضير';
+        if (order.cancelled_at) status = 'الغاء';
+        else if (order.fulfillment_status === 'fulfilled') status = 'الشحن';
+        else if (order.financial_status === 'paid') status = 'تم';
 
-      if (existing.length === 1) {
-        // أوردر واحد: تحديث البيانات مباشرة
+        await supabaseRequest('POST', 'orders', {
+          id: orderId, customer, phone, address,
+          item: itemText, quantity: totalQty, productPrice: totalPrice, shippingPrice,
+          notes, status, page: 'يمن دور ويب',
+          shopify_order_id: order.id, shopify_store: 'yemen_door', source: 'shopify', date,
+        });
+        inserted++;
+      } else if (existing.length === 1) {
+        // أوردر واحد موجود: تحديث البيانات فقط
         await supabaseRequest('PATCH',
           `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`,
           { phone, item: itemText, quantity: totalQty, productPrice: totalPrice, shippingPrice }
         );
         updated++;
       } else {
-        // أكثر من أوردر مرتبط (الأوردرات المنفصلة القديمة #1000-1 #1000-2):
-        // احذفهم وأدخل أوردر واحد صح
+        // أكثر من أوردر مرتبط (#1000-1 #1000-2): احذفهم وأدخل أوردر واحد صح
         const currentStatus = existing[0]?.status || 'جاري التحضير';
-        const orderId = order.name || `#${order.order_number}`;
-        const customer = b.name || s.name || `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'عميل Shopify';
-        const address = s.address1 || b.address1 || '';
-
         await supabaseRequest('DELETE',
           `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`
         );
         await supabaseRequest('POST', 'orders', {
-          id: orderId,
-          customer, phone, address,
-          item: itemText,
-          quantity: totalQty,
-          productPrice: totalPrice,
-          shippingPrice,
-          notes: order.note || '',
-          status: currentStatus,
-          page: 'يمن دور ويب',
-          shopify_order_id: order.id,
-          shopify_store: 'yemen_door',
-          source: 'shopify',
-          date: new Date(order.created_at).toLocaleDateString('ar-EG'),
+          id: orderId, customer, phone, address,
+          item: itemText, quantity: totalQty, productPrice: totalPrice, shippingPrice,
+          notes, status: currentStatus, page: 'يمن دور ويب',
+          shopify_order_id: order.id, shopify_store: 'yemen_door', source: 'shopify', date,
         });
         updated++;
       }
     }
 
-    return res.status(200).json({ ok: true, orders: orders.length, updated, skipped });
+    return res.status(200).json({ ok: true, orders: orders.length, updated, inserted });
   } catch (err) {
     console.error(`[sync] Error: ${err.message}`);
     return res.status(200).json({ ok: false, error: err.message });
