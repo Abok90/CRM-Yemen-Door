@@ -422,6 +422,8 @@
             const [statsDateTo, setStatsDateTo] = useState('');
             const [selectedOrders, setSelectedOrders] = useState([]);
             const [isDeletingMultiple, setIsDeletingMultiple] = useState(false);
+            const [bulkStatusValue, setBulkStatusValue] = useState('');
+            const [isBulkChangingStatus, setIsBulkChangingStatus] = useState(false);
             const [searchResults, setSearchResults] = useState([]); 
             const [isSearchingDb, setIsSearchingDb] = useState(false); 
             const [showDuplicatesOnly, setShowDuplicatesOnly] = useState(false);
@@ -1905,6 +1907,25 @@
                 } catch (error) { notify(`فشل المسح الجماعي: ${error.message}`); setOrders(previousOrders); } finally { setIsDeletingMultiple(false); }
             };
 
+            const handleBulkStatusChange = async () => {
+                if (!user || selectedOrders.length === 0 || !bulkStatusValue) return;
+                if (!window.confirm(\u062a\u0623\u0643\u064a\u062f: \u062a\u063a\u064a\u064a\u0631 \u062d\u0627\u0644\u0629 \ \u0637\u0644\u0628 \u0625\u0644\u0649 [\]?)) return;
+                setIsBulkChangingStatus(true);
+                const idsToUpdate = [...selectedOrders];
+                const previousOrders = [...orders];
+                // Optimistic update
+                setOrders(prev => prev.map(o => idsToUpdate.includes(o.id) ? { ...o, status: bulkStatusValue } : o));
+                setSelectedOrders([]);
+                try {
+                    const { error } = await supabase.from('orders').update({ status: bulkStatusValue }).in('id', idsToUpdate);
+                    if (error) throw error;
+                    logActivity(\u062a\u063a\u064a\u064a\u0631 \u062d\u0627\u0644\u0629 \ \u0637\u0644\u0628 \u0625\u0644\u0649 '\', '\u0645\u062a\u0639\u062f\u062f');
+                    notify(\u062a\u0645 \u062a\u063a\u064a\u064a\u0631 \u062d\u0627\u0644\u0629 \ \u0637\u0644\u0628 \u0625\u0644\u0649 '\', 'success');
+                    setBulkStatusValue('');
+                } catch (err) { notify(\u0641\u0634\u0644 \u062a\u063a\u064a\u064a\u0631 \u0627\u0644\u062d\u0627\u0644\u0629: \); setOrders(previousOrders); setSelectedOrders(idsToUpdate); }
+                finally { setIsBulkChangingStatus(false); }
+            };
+
             const handleBulkChange = (index, field, value) => {
                 const newBulk = [...bulkOrders];
                 newBulk[index] = { ...newBulk[index], [field]: value };
@@ -2270,7 +2291,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.44</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.45</span>
                             </div>
                         </nav>
                     </aside>
@@ -2522,6 +2543,35 @@
                                             {isSuperAdmin && <button onClick={() => setShowShopifySyncModal(true)} className="flex items-center gap-1 px-2 py-1.5 rounded-lg font-bold text-xs border bg-white hover:bg-green-50 border-slate-200 text-green-700 transition-colors">🔄 Shopify</button>}
                                             {/* أزرار التصدير والحذف عند التحديد */}
                                             {selectedOrders.length > 0 && (<>
+                                                {/* === Bulk Status Change === */}
+                                                <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded-xl px-2 py-1">
+                                                    <span className="text-[10px] font-black text-amber-700 whitespace-nowrap hidden sm:block">{selectedOrders.length} محدد</span>
+                                                    <select
+                                                        value={bulkStatusValue}
+                                                        onChange={e => setBulkStatusValue(e.target.value)}
+                                                        className="text-xs font-bold text-slate-700 bg-white border border-amber-300 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer"
+                                                    >
+                                                        <option value="">— تغيير الحالة —</option>
+                                                        <option value="جاري التحضير">🔵 جاري التحضير</option>
+                                                        <option value="تم">✅ تم</option>
+                                                        <option value="الشحن">🚚 الشحن</option>
+                                                        <option value="مراجعة">🟡 مراجعة</option>
+                                                        <option value="استبدال">🔄 استبدال</option>
+                                                        <option value="مرتجع">↩️ مرتجع</option>
+                                                        <option value="الغاء">❌ الغاء</option>
+                                                        <option value="تاجيل">⏸️ تاجيل</option>
+                                                        <option value="اعادة ارسال">📤 اعادة ارسال</option>
+                                                        <option value="خارجي">🌐 خارجي</option>
+                                                    </select>
+                                                    <button
+                                                        onClick={handleBulkStatusChange}
+                                                        disabled={!bulkStatusValue || isBulkChangingStatus}
+                                                        className="flex items-center gap-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded-lg font-black text-xs shadow transition-colors"
+                                                    >
+                                                        {isBulkChangingStatus ? '...' : '✓ تطبيق'}
+                                                    </button>
+                                                </div>
+                                                <div className="w-px h-5 bg-slate-200 hidden sm:block"></div>
                                                 <button onClick={() => runBulkAction(exportSelectedToCSV)} className="flex items-center gap-1 bg-green-600 hover:bg-green-700 text-white px-2 py-1.5 rounded-lg font-bold text-xs shadow transition-colors"><IconDownload size={12} /> إكسيل</button>
                                                 {(isSuperAdmin || userRole.can_export_shipping) && <button onClick={() => runBulkAction(exportShippingCSV)} className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white px-2 py-1.5 rounded-lg font-bold text-xs shadow transition-colors"><IconTruck size={12} /> شحن</button>}
                                                 <button onClick={() => runBulkAction(printSelectedOrders)} className="flex items-center gap-1 bg-purple-600 hover:bg-purple-700 text-white px-2 py-1.5 rounded-lg font-bold text-xs shadow transition-colors"><IconPrinter size={12} /> طباعة</button>
