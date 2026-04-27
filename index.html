@@ -659,7 +659,7 @@
                 setIsSearchingDb(true);
                 try {
                     let query = supabase.from('orders').select('*')
-                        .or(`customer.ilike.%${searchText}%,phone.ilike.%${searchText}%,id.ilike.%${searchText}%,\"trackingNumber\".ilike.%${searchText}%,item.ilike.%${searchText}%`)
+                        .or(`customer.ilike.%${searchText}%,phone.ilike.%${searchText}%,id.ilike.%${searchText}%,"trackingNumber".ilike.%${searchText}%,item.ilike.%${searchText}%`)
                         .order('created_at', { ascending: false })
                         .limit(500);
                     // تأمين الصلاحيات: الموظف يشوف صفحاته فقط حتى في البحث
@@ -1272,13 +1272,12 @@
                         .eq('page', page)
                         .order('created_at', { ascending: false })
                         .limit(1);
-                    if (!data || data.length === 0) return 
-''
+                    if (!data || data.length === 0) return '';
                     const lastId = data[0]?.id || '';
                     const numMatch = lastId.match(/(\d+)$/);
                     if (numMatch) return String(parseInt(numMatch[1]) + 1);
                     return '';
-                } catch { return ''; }
+                } catch(e) { return ''; }
             };
 
             // إعادة تعيين الفلاتر تلقائياً عند مغادرة صفحة الطلبات
@@ -1909,20 +1908,19 @@
 
             const handleBulkStatusChange = async () => {
                 if (!user || selectedOrders.length === 0 || !bulkStatusValue) return;
-                if (!window.confirm(\u062a\u0623\u0643\u064a\u062f: \u062a\u063a\u064a\u064a\u0631 \u062d\u0627\u0644\u0629 \ \u0637\u0644\u0628 \u0625\u0644\u0649 [\]?)) return;
+                if (!window.confirm('تأكيد: تغيير حالة ' + selectedOrders.length + ' طلب إلى [' + bulkStatusValue + ']؟')) return;
                 setIsBulkChangingStatus(true);
                 const idsToUpdate = [...selectedOrders];
                 const previousOrders = [...orders];
-                // Optimistic update
                 setOrders(prev => prev.map(o => idsToUpdate.includes(o.id) ? { ...o, status: bulkStatusValue } : o));
                 setSelectedOrders([]);
                 try {
                     const { error } = await supabase.from('orders').update({ status: bulkStatusValue }).in('id', idsToUpdate);
                     if (error) throw error;
-                    logActivity(\u062a\u063a\u064a\u064a\u0631 \u062d\u0627\u0644\u0629 \ \u0637\u0644\u0628 \u0625\u0644\u0649 '\', '\u0645\u062a\u0639\u062f\u062f');
-                    notify(\u062a\u0645 \u062a\u063a\u064a\u064a\u0631 \u062d\u0627\u0644\u0629 \ \u0637\u0644\u0628 \u0625\u0644\u0649 '\', 'success');
+                    logActivity('تغيير حالة ' + idsToUpdate.length + ' طلب إلى ' + bulkStatusValue, 'متعدد');
+                    notify('تم تغيير حالة ' + idsToUpdate.length + ' طلب إلى ' + bulkStatusValue, 'success');
                     setBulkStatusValue('');
-                } catch (err) { notify(\u0641\u0634\u0644 \u062a\u063a\u064a\u064a\u0631 \u0627\u0644\u062d\u0627\u0644\u0629: \); setOrders(previousOrders); setSelectedOrders(idsToUpdate); }
+                } catch (err) { notify('فشل تغيير الحالة: ' + err.message); setOrders(previousOrders); setSelectedOrders(idsToUpdate); }
                 finally { setIsBulkChangingStatus(false); }
             };
 
