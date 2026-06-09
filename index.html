@@ -728,16 +728,32 @@
 
             useEffect(() => {
                 let mounted = true;
+
+                // 🛟 شبكة أمان: لو فضل التحميل متعلّق لأي سبب (شبكة بطيئة، قفل جلسة معلّق
+                // في الـ Web Locks عند فتح أكثر من تبويب، أو توكن معطوب) نوقف اللودينج
+                // بعد 10 ثوانٍ حتى يفتح التطبيق على شاشة الدخول بدل ما يفضل لودينج للأبد.
+                const safetyTimer = setTimeout(() => {
+                    if (mounted) setAuthLoading(false);
+                }, 10000);
+
                 const initSession = async () => {
                     try {
-                        const { data: { session } } = await supabase.auth.getSession();
+                        // نعمل race بين getSession ومهلة 8 ثوانٍ لأن getSession ممكن يتعلّق للأبد
+                        const sessionResult = await Promise.race([
+                            supabase.auth.getSession(),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('getSession timeout')), 8000))
+                        ]);
+                        const session = sessionResult?.data?.session;
                         if (mounted) {
                             if (session?.user) {
                                 setUser(session.user);
                                 await fetchUserRole(session.user.id, session.user.email);
                             } else { setAuthLoading(false); }
                         }
-                    } catch (err) { if (mounted) setAuthLoading(false); }
+                    } catch (err) {
+                        console.error('initSession error:', err);
+                        if (mounted) setAuthLoading(false);
+                    }
                 };
                 initSession();
 
@@ -751,7 +767,7 @@
                         }
                     }
                 });
-                return () => { mounted = false; subscription?.unsubscribe(); };
+                return () => { mounted = false; clearTimeout(safetyTimer); subscription?.unsubscribe(); };
             }, []);
 
             useEffect(() => {
@@ -2289,7 +2305,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.45</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.46</span>
                             </div>
                         </nav>
                     </aside>
