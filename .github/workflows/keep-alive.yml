@@ -1,0 +1,41 @@
+name: Keep Supabase Alive
+
+# يمنع توقّف مشروع Supabase المجاني تلقائياً (auto-pause بعد ~7 أيام خمول)
+# عن طريق عمل ping بسيط للداتابيز كل يوم — يحافظ على نشاطها بدون أي تكلفة.
+
+on:
+  schedule:
+    - cron: '23 5 * * *'   # يومياً الساعة 5:23 صباحاً UTC
+  workflow_dispatch:        # زر تشغيل يدوي للتجربة من تبويب Actions
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST API
+        run: |
+          # القيم عامة بالفعل (موجودة في كود الواجهة) — ممكن تجاوزها عبر Secrets لو حبيت
+          URL="${{ secrets.SUPABASE_URL }}"
+          KEY="${{ secrets.SUPABASE_ANON_KEY }}"
+          URL="${URL:-https://jkhojxxjjtclstwbhfne.supabase.co}"
+          KEY="${KEY:-sb_publishable_QGFKYHwRBpaYeqvT4dbuTg_d5JzzlIk}"
+
+          # 3 محاولات مع backoff لتجاوز أي خطأ شبكة عابر
+          for attempt in 1 2 3; do
+            code=$(curl -sS -m 30 -o /tmp/resp.txt -w "%{http_code}" \
+              "$URL/rest/v1/orders?select=id&limit=1" \
+              -H "apikey: $KEY" \
+              -H "Authorization: Bearer $KEY") && [ -n "$code" ] && break
+            echo "Attempt $attempt failed, retrying..."
+            sleep $((attempt * 5))
+          done
+
+          echo "HTTP status: $code"
+          head -c 300 /tmp/resp.txt; echo
+
+          # أي رد فعلي من Supabase معناه إن المشروع نشِط (حتى لو RLS رجّع قائمة فاضية)
+          if [ -z "$code" ] || [ "$code" = "000" ]; then
+            echo "❌ لم يصل أي رد من Supabase — راجع حالة المشروع"
+            exit 1
+          fi
+          echo "✅ Supabase نشِط — تم منع التوقّف التلقائي"
