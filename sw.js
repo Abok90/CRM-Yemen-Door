@@ -1,5 +1,5 @@
-// CRM Pro Service Worker — v2
-const CACHE_NAME = 'crm-pro-v2';
+// CRM Pro Service Worker — v3
+const CACHE_NAME = 'crm-pro-v3';
 const STATIC_ASSETS = ['/'];
 
 self.addEventListener('install', (event) => {
