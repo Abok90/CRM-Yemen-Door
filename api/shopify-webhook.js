@@ -36,6 +36,36 @@ function findNoteAttr(noteAttrs, keys) {
   return '';
 }
 
+// يحسب الإجمالي (المنتجات) بعد خصم الخصومات (كود خصم / تعديل سعر الأوردر)
+function computeProductPrice(order) {
+  const lineItems = order.line_items || [];
+  const gross = lineItems.reduce((sum, it) => sum + parseFloat(it.price || 0) * (it.quantity || 1), 0);
+
+  // subtotal_price من شوبيفاي = إجمالي المنتجات بعد كل الخصومات وقبل الشحن/الضريبة
+  const subtotalRaw = order.current_subtotal_price != null ? order.current_subtotal_price : order.subtotal_price;
+  if (subtotalRaw != null && subtotalRaw !== '') {
+    const subtotal = parseFloat(subtotalRaw);
+    if (!isNaN(subtotal) && subtotal >= 0) return subtotal;
+  }
+
+  // احتياطي: اطرح الخصومات يدوياً
+  const lineDiscounts = lineItems.reduce((sum, it) =>
+    sum + (it.discount_allocations || []).reduce((a, d) => a + parseFloat(d.amount || 0), 0), 0);
+  const orderDiscounts = parseFloat(order.current_total_discounts || order.total_discounts || 0);
+  const discount = lineDiscounts > 0 ? lineDiscounts : orderDiscounts;
+  return Math.max(0, gross - discount);
+}
+
+function buildItemSummary(order) {
+  const lineItems = order.line_items || [];
+  const itemText = lineItems.map(it => {
+    const name = it.variant_title ? `${it.title} - ${it.variant_title}` : it.title;
+    return it.quantity > 1 ? `${name} ×${it.quantity}` : name;
+  }).join('\n');
+  const totalQty = lineItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
+  return { itemText, totalQty };
+}
+
 function extractOrderCustomer(order) {
   const b = order.billing_address || {};
   const s = order.shipping_address || {};
@@ -126,12 +156,8 @@ async function handler(req, res) {
       const orderId = order.name || `#${order.order_number}`;
       const { customer, phone, address } = extractOrderCustomer(order);
 
-      const itemText = lineItems.map(it => {
-        const name = it.variant_title ? `${it.title} - ${it.variant_title}` : it.title;
-        return it.quantity > 1 ? `${name} ×${it.quantity}` : name;
-      }).join('\n');
-      const totalQty = lineItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
-      const totalPrice = lineItems.reduce((sum, it) => sum + parseFloat(it.price || 0) * (it.quantity || 1), 0);
+      const { itemText, totalQty } = buildItemSummary(order);
+      const totalPrice = computeProductPrice(order);
 
       await supabaseRequest('POST', 'orders', {
         id: orderId, customer, phone, address,
@@ -169,6 +195,16 @@ async function handler(req, res) {
       if (customer && customer !== 'عميل Shopify') patch.customer = customer;
       if (phone) patch.phone = phone;
       if (address) patch.address = address;
+
+      // تحديث السعر والمنتجات لو الأوردر اتعدّل (تعديل سعر / خصم / تغيير المنتجات)
+      if ((order.line_items || []).length > 0) {
+        const ship = (order.shipping_lines || [])[0] || {};
+        const { itemText, totalQty } = buildItemSummary(order);
+        patch.item = itemText;
+        patch.quantity = totalQty;
+        patch.productPrice = computeProductPrice(order);
+        patch.shippingPrice = parseFloat(ship.price || 0);
+      }
 
       if (Object.keys(patch).length > 0) {
         await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, patch);

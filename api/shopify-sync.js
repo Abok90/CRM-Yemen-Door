@@ -53,6 +53,26 @@ function extractCustomer(order) {
   return { customer, phone, address };
 }
 
+// يحسب الإجمالي (المنتجات) بعد خصم الخصومات (كود خصم / تعديل سعر الأوردر)
+function computeProductPrice(order) {
+  const lineItems = order.line_items || [];
+  const gross = lineItems.reduce((sum, it) => sum + parseFloat(it.price || 0) * (it.quantity || 1), 0);
+
+  // subtotal_price من شوبيفاي = إجمالي المنتجات بعد كل الخصومات وقبل الشحن/الضريبة
+  const subtotalRaw = order.current_subtotal_price != null ? order.current_subtotal_price : order.subtotal_price;
+  if (subtotalRaw != null && subtotalRaw !== '') {
+    const subtotal = parseFloat(subtotalRaw);
+    if (!isNaN(subtotal) && subtotal >= 0) return subtotal;
+  }
+
+  // احتياطي: اطرح الخصومات يدوياً
+  const lineDiscounts = lineItems.reduce((sum, it) =>
+    sum + (it.discount_allocations || []).reduce((a, d) => a + parseFloat(d.amount || 0), 0), 0);
+  const orderDiscounts = parseFloat(order.current_total_discounts || order.total_discounts || 0);
+  const discount = lineDiscounts > 0 ? lineDiscounts : orderDiscounts;
+  return Math.max(0, gross - discount);
+}
+
 function buildOrderData(order) {
   const lineItems = order.line_items || [];
   const ship = (order.shipping_lines || [])[0] || {};
@@ -64,7 +84,7 @@ function buildOrderData(order) {
   }).join('\n');
 
   const totalQty = lineItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
-  const totalPrice = lineItems.reduce((sum, it) => sum + parseFloat(it.price || 0) * (it.quantity || 1), 0);
+  const totalPrice = computeProductPrice(order);
   const shippingPrice = parseFloat(ship.price || 0);
 
   let status = 'جاري التحضير';
