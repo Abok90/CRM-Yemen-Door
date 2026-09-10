@@ -1216,19 +1216,52 @@
                     .replace(/\s+/g, ' ')
                     .trim();
 
+                // تطبيع النص العربي: إزالة التشكيل والتطويل، وتوحيد الألف/الياء/التاء المربوطة،
+                // وحذف المقاسات (25 gr) وعلامات الترقيم — عشان المطابقة تنجح رغم اختلافات الكتابة
+                const normAr = (s) => String(s || '')
+                    .replace(/[ً-ْٰـ]/g, '')
+                    .replace(/[أإآٱ]/g, 'ا')
+                    .replace(/ى/g, 'ي')
+                    .replace(/ة/g, 'ه')
+                    .replace(/ؤ/g, 'و').replace(/ئ/g, 'ي').replace(/ء/g, '')
+                    .replace(/\d+\s*(?:gr|gm|g|ml|kg|l|جم|جرام|جرامات|كجم|مل|لتر|قطعة|قطع)\b/gi, ' ')
+                    .replace(/[()\[\]{}.,،؛:!؟?\-–—_/\\"'«»…•|]/g, ' ')
+                    .toLowerCase()
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
+                const STOP = new Set(['default', 'title', 'the', 'and', 'gr', 'gm', 'ml', 'و', 'من', 'او', 'مع', 'اللون', 'المقاس', 'الحجم', 'color', 'size']);
+                // إزالة واو العطف الملتصقة بأداة التعريف (واللبان → اللبان) عشان المطابقة تنجح سواء كانت الواو منفصلة أو ملتصقة
+                const tokensOf = (s) => normAr(s).split(' ')
+                    .map(t => t.replace(/^و(?=ال)/, ''))
+                    .filter(t => t.length >= 2 && !STOP.has(t));
+
                 // مطابقة سطر المنتج بكتالوج المنتجات لجلب الصورة والاسم الأساسي
                 const matchProduct = (lineName) => {
-                    const n = cleanLine(lineName).toLowerCase();
-                    if (!n) return null;
-                    let best = null;
+                    const ln = normAr(lineName);
+                    if (!ln) return null;
+                    const lnToks = new Set(tokensOf(lineName));
+                    let best = null, bestScore = 0;
                     for (const p of products) {
                         if (!p.name) continue;
-                        const pn = String(p.name).toLowerCase().trim();
+                        const pn = normAr(p.name);
                         if (!pn) continue;
-                        if (n.includes(pn) || pn.includes(n)) {
-                            // نفضّل أطول اسم مطابق (الأكثر تحديداً)
-                            if (!best || pn.length > String(best.name).toLowerCase().trim().length) best = p;
+                        let score = 0;
+                        if (ln.includes(pn) || pn.includes(ln)) {
+                            // احتواء كامل → أقوى مطابقة (نفضّل الاسم الأطول/الأكثر تحديداً)
+                            score = 1000 + pn.length;
+                        } else {
+                            const pt = tokensOf(p.name);
+                            if (pt.length) {
+                                let shared = 0;
+                                for (const t of pt) if (lnToks.has(t)) shared++;
+                                const ratio = shared / pt.length;
+                                // تطابق أغلب كلمات اسم المنتج داخل السطر
+                                if (shared >= 2 && ratio >= 0.5) score = shared * 10 + ratio;
+                                else if (pt.length === 1 && shared === 1) score = 6;
+                            }
                         }
+                        if (score > bestScore) { bestScore = score; best = p; }
                     }
                     return best;
                 };
@@ -1249,8 +1282,16 @@
                             name = String(matched.name).trim();
                             image = matched.image || '';
                             // المتغير = باقي السطر بعد إزالة اسم المنتج
-                            variant = cleaned.replace(new RegExp(matched.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '')
+                            let rest = cleaned.replace(new RegExp(matched.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '')
                                 .replace(/^[-–—:،,\s]+|[-–—:،,\s]+$/g, '').trim();
+                            // لو الإزالة المباشرة فشلت (اختلاف تشكيل)، حاول التقاط المقاس أو آخر مقطع بعد شرطة
+                            if (!rest || rest === cleaned) {
+                                const sizeM = cleaned.match(/\d+\s*(?:gr|gm|g|ml|kg|جم|جرام|كجم|مل|لتر)\b/i);
+                                if (sizeM) rest = sizeM[0].trim();
+                                else if (cleaned.includes(' - ')) rest = cleaned.split(' - ').pop().trim();
+                                else rest = '';
+                            }
+                            variant = rest;
                         } else {
                             name = cleaned; variant = ''; image = '';
                         }
@@ -1269,9 +1310,10 @@
                 const rowsHtml = items.map((it, idx) => `
                     <tr style="border-bottom:1px solid #e5e7eb;${idx % 2 === 1 ? 'background:#fafafa;' : ''}break-inside:avoid;">
                         <td style="padding:8px;text-align:center;width:74px;">
-                            ${it.image
-                                ? `<img src="${escapeHtml(it.image)}" style="width:58px;height:58px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;" />`
-                                : `<div style="width:58px;height:58px;border-radius:8px;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:8px;margin:0 auto;">بدون صورة</div>`}
+                            <div style="position:relative;width:58px;height:58px;margin:0 auto;">
+                                <div style="position:absolute;inset:0;border-radius:8px;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:8px;text-align:center;">بدون صورة</div>
+                                ${it.image ? `<img src="${escapeHtml(it.image)}" referrerpolicy="no-referrer" loading="eager" onerror="this.style.display='none'" style="position:absolute;inset:0;width:58px;height:58px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;background:#fff;" />` : ''}
+                            </div>
                         </td>
                         <td style="padding:8px 10px;font-size:12px;font-weight:700;color:#111827;line-height:1.5;">${escapeHtml(it.name)}</td>
                         <td style="padding:8px 10px;font-size:11px;color:#374151;">${escapeHtml(it.variant || '—')}</td>
@@ -2181,7 +2223,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.49</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.50</span>
                             </div>
                         </nav>
                     </aside>
