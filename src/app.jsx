@@ -1578,6 +1578,36 @@
                 finally { setLoadingDB(false); }
             };
 
+            // مزامنة كل المنتجات من شوبيفاي (بالصور) وتنزيلها في كتالوج السيستم
+            const [productSyncStatus, setProductSyncStatus] = useState('');
+            const handleShopifyProductsSync = async () => {
+                if (!window.confirm('هيتم جلب كل المنتجات من شوبيفاي (بصورها) وإضافتها للسيستم.\nالمنتجات الموجودة هيتحدّث لها الصورة فقط بدون المساس بالسعر أو باقي البيانات.\nنكمل؟')) return;
+                setLoadingDB(true);
+                setProductSyncStatus('syncing');
+                try {
+                    const { data: { session } } = await supabase.auth.getSession();
+                    const authToken = session?.access_token || '';
+                    const res = await fetch('/api/shopify-products-sync', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-crm-auth': authToken },
+                    });
+                    const result = await res.json();
+                    if (result.ok) {
+                        const parts = [];
+                        if (result.inserted) parts.push(`أُضيف ${result.inserted}`);
+                        if (result.updated) parts.push(`حُدّث ${result.updated}`);
+                        if (result.skipped) parts.push(`بدون تغيير ${result.skipped}`);
+                        notify(`✅ مزامنة المنتجات: ${parts.join(' | ') || 'لا جديد'} (إجمالي ${result.total})`, 'success');
+                        setProductSyncStatus('ok');
+                        fetchProducts();
+                    } else {
+                        notify('خطأ في مزامنة المنتجات: ' + result.error);
+                        setProductSyncStatus('error');
+                    }
+                } catch (e) { notify('خطأ: ' + e.message); setProductSyncStatus('error'); }
+                finally { setLoadingDB(false); }
+            };
+
             const deleteProduct = async (id) => {
                 if(!window.confirm("متأكد من حذف المنتج؟")) return;
                 // Delete storage image if it belongs to our bucket
@@ -2223,7 +2253,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.50</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.51</span>
                             </div>
                         </nav>
                     </aside>
@@ -2781,6 +2811,13 @@
 
                             {currentTab === 'products' && isSuperAdmin && (
                                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-6xl mx-auto">
+                                    <div className="bg-teal-50 border border-teal-200 p-4 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                        <div>
+                                            <h3 className="font-black text-teal-900 text-sm md:text-base flex items-center gap-2">🔄 مزامنة المنتجات من شوبيفاي</h3>
+                                            <p className="text-[11px] text-teal-700 font-bold mt-1">بتجيب كل المنتجات بصورها من المتجر وتضيفها للكتالوج — عشان صور المنتجات تظهر في قائمة التجهيز. الموجود بيتحدّث له الصورة بس من غير مساس بالسعر.</p>
+                                        </div>
+                                        <button onClick={handleShopifyProductsSync} disabled={loadingDB} className="flex-none bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-bold py-2.5 px-5 rounded-xl shadow-md transition-colors text-sm whitespace-nowrap">{productSyncStatus === 'syncing' ? '⏳ جاري المزامنة...' : '📥 مزامنة المنتجات الآن'}</button>
+                                    </div>
                                     <div className="bg-sky-50 border border-sky-200 p-4 md:p-6 rounded-2xl shadow-sm">
                                         <h2 className="font-black text-sky-900 text-base md:text-lg mb-4 flex items-center gap-2"><IconStore/> {editingProduct.id ? 'تعديل بيانات المنتج' : 'إضافة منتج جديد للسيستم'}</h2>
                                         <form onSubmit={saveProduct} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
