@@ -1266,12 +1266,10 @@
                     return best;
                 };
 
-                // تجميع العناصر: المفتاح = اسم المنتج + المتغير
-                const map = new Map();
-                for (const o of toPrint) {
+                // تحليل أسطر الأوردر إلى عناصر (اسم/متغير/صورة/كمية) مع مطابقة الكتالوج
+                const parseOrderItems = (o) => {
                     const lines = String(o.item || '').split('\n').map(l => l.trim()).filter(Boolean);
-                    if (lines.length === 0) continue;
-                    lines.forEach((line) => {
+                    return lines.map((line) => {
                         const qtyMatch = line.match(/[×xX✕✖*]\s*(\d+)/);
                         const qty = qtyMatch ? (parseInt(qtyMatch[1], 10) || 1)
                                   : (lines.length === 1 ? (Number(o.quantity) || 1) : 1);
@@ -1295,6 +1293,17 @@
                         } else {
                             name = cleaned; variant = ''; image = '';
                         }
+                        return { name, variant, image, qty };
+                    });
+                };
+
+                // تجميع العناصر عبر كل الأوردرات + الاحتفاظ بأصناف كل أوردر لطباعته منفرداً
+                const map = new Map();
+                const perOrder = [];
+                for (const o of toPrint) {
+                    const parsed = parseOrderItems(o);
+                    perOrder.push({ order: o, items: parsed });
+                    parsed.forEach(({ name, variant, image, qty }) => {
                         const key = name + '||' + variant;
                         if (!map.has(key)) map.set(key, { name, variant, image, qty: 0, orders: [] });
                         const entry = map.get(key);
@@ -1306,6 +1315,12 @@
                 const items = Array.from(map.values()).sort((a, b) => b.qty - a.qty || a.name.localeCompare(b.name, 'ar'));
                 if (items.length === 0) return;
                 const totalQty = items.reduce((s, i) => s + i.qty, 0);
+
+                // خلية صورة موحّدة: صورة المنتج فوق خلفية بديلة "بدون صورة"
+                const imgBox = (image, px) => `<div style="position:relative;width:${px}px;height:${px}px;margin:0 auto;">
+                    <div style="position:absolute;inset:0;border-radius:8px;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:8px;text-align:center;">بدون صورة</div>
+                    ${image ? `<img src="${escapeHtml(image)}" referrerpolicy="no-referrer" loading="eager" onerror="this.style.display='none'" style="position:absolute;inset:0;width:${px}px;height:${px}px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;background:#fff;" />` : ''}
+                </div>`;
 
                 const rowsHtml = items.map((it, idx) => `
                     <tr style="border-bottom:1px solid #e5e7eb;${idx % 2 === 1 ? 'background:#fafafa;' : ''}break-inside:avoid;">
@@ -1353,12 +1368,63 @@
                     </table>
                 </div>`;
 
+                // قسم تفصيلي: كل أوردر لوحده في صفحة ببياناته وأصنافه (بوليصة تجهيز)
+                const statusColors = { 'جاري التحضير': '#0ea5e9', 'تم': '#22c55e', 'الشحن': '#f97316', 'مراجعة': '#eab308', 'تاجيل': '#94a3b8', 'استبدال': '#8b5cf6', 'مرتجع': '#f43f5e', 'الغاء': '#ef4444', 'اعادة ارسال': '#6366f1', 'خارجي': '#14b8a6' };
+                const infoRow = (label, val) => val ? `<div style="font-size:12px;color:#334155;margin-bottom:4px;"><span style="color:#94a3b8;font-weight:700;">${label}:</span> <span style="font-weight:700;">${escapeHtml(val)}</span></div>` : '';
+
+                const ordersHtml = perOrder.map(({ order: o, items: its }) => {
+                    const color = statusColors[o.status] || '#64748b';
+                    const prod = Number(o.productPrice) || 0;
+                    const ship = Number(o.shippingPrice) || 0;
+                    const total = prod + ship;
+                    const itemRows = its.length ? its.map((it, i) => `
+                        <tr style="border-bottom:1px solid #eef2f7;${i % 2 === 1 ? 'background:#fafafa;' : ''}break-inside:avoid;">
+                            <td style="padding:7px;text-align:center;width:64px;">${imgBox(it.image, 50)}</td>
+                            <td style="padding:7px 10px;font-size:12px;font-weight:700;color:#111827;line-height:1.5;">${escapeHtml(it.name)}</td>
+                            <td style="padding:7px 10px;font-size:11px;color:#374151;">${escapeHtml(it.variant || '—')}</td>
+                            <td style="padding:7px 10px;text-align:center;font-size:14px;font-weight:900;color:#0f172a;">${it.qty}</td>
+                        </tr>`).join('') : `<tr><td colspan="4" style="padding:12px;text-align:center;color:#94a3b8;font-size:12px;">${escapeHtml(o.item || 'لا توجد أصناف')}</td></tr>`;
+
+                    return `<div style="page-break-before:always;padding:24px;font-family:'Cairo',Arial,sans-serif;direction:rtl;">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0f172a;padding-bottom:10px;margin-bottom:12px;">
+                            <div>
+                                <div style="font-size:22px;font-weight:900;color:#0f172a;">أوردر ${escapeHtml(o.id)}</div>
+                                <div style="font-size:11px;color:#64748b;margin-top:3px;">${escapeHtml(o.date || '')}${o.page ? ' • ' + escapeHtml(o.page) : ''}</div>
+                            </div>
+                            <span style="background:${color}18;color:${color};border:1px solid ${color}55;border-radius:8px;padding:3px 10px;font-size:11px;font-weight:800;white-space:nowrap;">${escapeHtml(o.status || '')}</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:14px;flex-wrap:wrap;">
+                            <div style="flex:1;min-width:220px;">
+                                ${infoRow('الاسم', o.customer)}
+                                ${infoRow('الموبايل', o.phone)}
+                                ${infoRow('العنوان', o.address)}
+                                ${infoRow('البوليصة', o.trackingNumber)}
+                            </div>
+                            <div style="text-align:left;min-width:160px;">
+                                <div style="font-size:12px;color:#334155;margin-bottom:4px;"><span style="color:#94a3b8;font-weight:700;">سعر المنتجات:</span> <span style="font-weight:700;">${prod} ج.م</span></div>
+                                <div style="font-size:12px;color:#334155;margin-bottom:4px;"><span style="color:#94a3b8;font-weight:700;">الشحن:</span> <span style="font-weight:700;">${ship} ج.م</span></div>
+                                <div style="font-size:16px;color:#0f172a;margin-top:6px;font-weight:900;">الإجمالي: ${total} ج.م</div>
+                            </div>
+                        </div>
+                        <table style="width:100%;border-collapse:collapse;">
+                            <thead style="display:table-header-group;"><tr style="border-bottom:1.5px solid #0f172a;">
+                                <th style="padding:7px;font-size:11px;text-align:center;color:#0f172a;">الصورة</th>
+                                <th style="padding:7px 10px;font-size:11px;text-align:right;color:#0f172a;">المنتج</th>
+                                <th style="padding:7px 10px;font-size:11px;text-align:right;color:#0f172a;">المتغير</th>
+                                <th style="padding:7px 10px;font-size:11px;text-align:center;color:#0f172a;">الكمية</th>
+                            </tr></thead>
+                            <tbody>${itemRows}</tbody>
+                        </table>
+                        ${o.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:11px;color:#92400e;"><b>ملاحظات:</b> ${escapeHtml(o.notes)}</div>` : ''}
+                    </div>`;
+                }).join('');
+
                 const win = window.open('', '_blank');
                 win.document.write(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><title>قائمة تجهيز</title>
                     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
                     <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:'Cairo',Arial,sans-serif;direction:rtl;background:white;}thead th{background:#f8fafc;}@media print{@page{size:A4 portrait;margin:12mm;}tr{break-inside:avoid;}}</style>
-                    <script>window.onload=function(){var imgs=Array.prototype.slice.call(document.images);var pending=imgs.filter(function(i){return !i.complete;}).length;function go(){setTimeout(function(){window.focus();window.print();},350);}if(pending===0){go();return;}function done(){pending--;if(pending<=0)go();}imgs.forEach(function(i){if(!i.complete){i.addEventListener('load',done);i.addEventListener('error',done);}});setTimeout(go,4000);};<\/script>
-                    </head><body>${html}</body></html>`);
+                    <script>window.onload=function(){var imgs=Array.prototype.slice.call(document.images);var pending=imgs.filter(function(i){return !i.complete;}).length;function go(){setTimeout(function(){window.focus();window.print();},350);}if(pending===0){go();return;}function done(){pending--;if(pending<=0)go();}imgs.forEach(function(i){if(!i.complete){i.addEventListener('load',done);i.addEventListener('error',done);}});setTimeout(go,Math.min(15000,4000+imgs.length*120));};<\/script>
+                    </head><body>${html}${ordersHtml}</body></html>`);
                 win.document.close();
                 win.focus();
             };
@@ -2253,7 +2319,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.51</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.52</span>
                             </div>
                         </nav>
                     </aside>
