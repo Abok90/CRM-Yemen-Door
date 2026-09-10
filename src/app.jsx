@@ -1204,6 +1204,123 @@
                 setTimeout(() => { win.print(); }, 400);
             };
 
+            // قائمة تجهيز (Pick List): تجميع المنتجات من الأوردرات المحددة مع صورة لكل منتج
+            const printPickList = () => {
+                if (selectedOrders.length === 0) return;
+                const toPrint = filteredOrders.filter(o => selectedOrders.includes(o.id));
+
+                // تنظيف اسم السطر من علامات الكمية والشرطات
+                const cleanLine = (s) => String(s || '')
+                    .replace(/[×xX✕✖*]\s*\d+/g, '')
+                    .replace(/^[-••\s]+/, '')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
+                // مطابقة سطر المنتج بكتالوج المنتجات لجلب الصورة والاسم الأساسي
+                const matchProduct = (lineName) => {
+                    const n = cleanLine(lineName).toLowerCase();
+                    if (!n) return null;
+                    let best = null;
+                    for (const p of products) {
+                        if (!p.name) continue;
+                        const pn = String(p.name).toLowerCase().trim();
+                        if (!pn) continue;
+                        if (n.includes(pn) || pn.includes(n)) {
+                            // نفضّل أطول اسم مطابق (الأكثر تحديداً)
+                            if (!best || pn.length > String(best.name).toLowerCase().trim().length) best = p;
+                        }
+                    }
+                    return best;
+                };
+
+                // تجميع العناصر: المفتاح = اسم المنتج + المتغير
+                const map = new Map();
+                for (const o of toPrint) {
+                    const lines = String(o.item || '').split('\n').map(l => l.trim()).filter(Boolean);
+                    if (lines.length === 0) continue;
+                    lines.forEach((line) => {
+                        const qtyMatch = line.match(/[×xX✕✖*]\s*(\d+)/);
+                        const qty = qtyMatch ? (parseInt(qtyMatch[1], 10) || 1)
+                                  : (lines.length === 1 ? (Number(o.quantity) || 1) : 1);
+                        const cleaned = cleanLine(line) || line;
+                        const matched = matchProduct(cleaned);
+                        let name, variant, image;
+                        if (matched) {
+                            name = String(matched.name).trim();
+                            image = matched.image || '';
+                            // المتغير = باقي السطر بعد إزالة اسم المنتج
+                            variant = cleaned.replace(new RegExp(matched.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '')
+                                .replace(/^[-–—:،,\s]+|[-–—:،,\s]+$/g, '').trim();
+                        } else {
+                            name = cleaned; variant = ''; image = '';
+                        }
+                        const key = name + '||' + variant;
+                        if (!map.has(key)) map.set(key, { name, variant, image, qty: 0, orders: [] });
+                        const entry = map.get(key);
+                        entry.qty += qty;
+                        if (!entry.orders.includes(o.id)) entry.orders.push(o.id);
+                    });
+                }
+
+                const items = Array.from(map.values()).sort((a, b) => b.qty - a.qty || a.name.localeCompare(b.name, 'ar'));
+                if (items.length === 0) return;
+                const totalQty = items.reduce((s, i) => s + i.qty, 0);
+
+                const rowsHtml = items.map((it, idx) => `
+                    <tr style="border-bottom:1px solid #e5e7eb;${idx % 2 === 1 ? 'background:#fafafa;' : ''}break-inside:avoid;">
+                        <td style="padding:8px;text-align:center;width:74px;">
+                            ${it.image
+                                ? `<img src="${escapeHtml(it.image)}" style="width:58px;height:58px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;" />`
+                                : `<div style="width:58px;height:58px;border-radius:8px;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:8px;margin:0 auto;">بدون صورة</div>`}
+                        </td>
+                        <td style="padding:8px 10px;font-size:12px;font-weight:700;color:#111827;line-height:1.5;">${escapeHtml(it.name)}</td>
+                        <td style="padding:8px 10px;font-size:11px;color:#374151;">${escapeHtml(it.variant || '—')}</td>
+                        <td style="padding:8px 10px;text-align:center;font-size:15px;font-weight:900;color:#0f172a;">${it.qty}</td>
+                        <td style="padding:8px 10px;font-size:10px;color:#6b7280;line-height:1.6;">${escapeHtml(it.orders.join('، '))}</td>
+                    </tr>`).join('');
+
+                const html = `<div style="padding:24px;font-family:'Cairo',Arial,sans-serif;direction:rtl;">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;">
+                        <div>
+                            <div style="font-size:26px;font-weight:900;color:#0f172a;">قائمة تجهيز</div>
+                            <div style="font-size:12px;color:#64748b;margin-top:4px;">إجمالي القطع: ${totalQty} &nbsp;•&nbsp; عدد الأصناف: ${items.length} &nbsp;•&nbsp; عدد الأوردرات: ${toPrint.length}</div>
+                        </div>
+                        <div style="text-align:left;font-size:12px;color:#64748b;">
+                            <div style="font-weight:700;color:#0f172a;">يمن دور</div>
+                            <div>${new Date().toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
+                        </div>
+                    </div>
+                    <table style="width:100%;border-collapse:collapse;">
+                        <thead style="display:table-header-group;">
+                            <tr style="border-bottom:2px solid #0f172a;">
+                                <th style="padding:8px;font-size:11px;text-align:center;color:#0f172a;">الصورة</th>
+                                <th style="padding:8px 10px;font-size:11px;text-align:right;color:#0f172a;">المنتج</th>
+                                <th style="padding:8px 10px;font-size:11px;text-align:right;color:#0f172a;">المتغير</th>
+                                <th style="padding:8px 10px;font-size:11px;text-align:center;color:#0f172a;">الكمية</th>
+                                <th style="padding:8px 10px;font-size:11px;text-align:right;color:#0f172a;">الأوردرات</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rowsHtml}</tbody>
+                        <tfoot>
+                            <tr style="border-top:2px solid #0f172a;">
+                                <td colspan="3" style="padding:10px;font-size:13px;font-weight:900;text-align:left;color:#0f172a;">الإجمالي</td>
+                                <td style="padding:10px;font-size:15px;font-weight:900;text-align:center;color:#0f172a;">${totalQty}</td>
+                                <td></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>`;
+
+                const win = window.open('', '_blank');
+                win.document.write(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><title>قائمة تجهيز</title>
+                    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
+                    <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:'Cairo',Arial,sans-serif;direction:rtl;background:white;}thead th{background:#f8fafc;}@media print{@page{size:A4 portrait;margin:12mm;}tr{break-inside:avoid;}}</style>
+                    <script>window.onload=function(){var imgs=Array.prototype.slice.call(document.images);var pending=imgs.filter(function(i){return !i.complete;}).length;function go(){setTimeout(function(){window.focus();window.print();},350);}if(pending===0){go();return;}function done(){pending--;if(pending<=0)go();}imgs.forEach(function(i){if(!i.complete){i.addEventListener('load',done);i.addEventListener('error',done);}});setTimeout(go,4000);};<\/script>
+                    </head><body>${html}</body></html>`);
+                win.document.close();
+                win.focus();
+            };
+
             const parseCSV = (text) => {
                 const result = []; let row = []; let inQuotes = false; let currentVal = '';
                 for (let i = 0; i < text.length; i++) {
@@ -2064,7 +2181,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.48</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.49</span>
                             </div>
                         </nav>
                     </aside>
@@ -2348,6 +2465,7 @@
                                                 <button onClick={() => runBulkAction(exportSelectedToCSV)} className="flex items-center gap-1 bg-green-600 hover:bg-green-700 text-white px-2 py-1.5 rounded-lg font-bold text-xs shadow transition-colors"><IconDownload size={12} /> إكسيل</button>
                                                 {(isSuperAdmin || userRole.can_export_shipping) && <button onClick={() => runBulkAction(exportShippingCSV)} className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white px-2 py-1.5 rounded-lg font-bold text-xs shadow transition-colors"><IconTruck size={12} /> شحن</button>}
                                                 <button onClick={() => runBulkAction(printSelectedOrders)} className="flex items-center gap-1 bg-purple-600 hover:bg-purple-700 text-white px-2 py-1.5 rounded-lg font-bold text-xs shadow transition-colors"><IconPrinter size={12} /> طباعة</button>
+                                                <button onClick={() => runBulkAction(printPickList)} className="flex items-center gap-1 bg-teal-600 hover:bg-teal-700 text-white px-2 py-1.5 rounded-lg font-bold text-xs shadow transition-colors"><IconPrinter size={12} /> قائمة تجهيز</button>
                                                 {(isSuperAdmin || userRole?.can_delete) && <button onClick={() => runBulkAction(handleDeleteMultipleOrders)} disabled={isDeletingMultiple} className="flex items-center gap-1 bg-red-600 hover:bg-red-700 text-white px-2 py-1.5 rounded-lg font-bold text-xs shadow transition-colors disabled:opacity-50"><IconTrash size={12} /> مسح</button>}
                                             </>)}
                                         </div>
