@@ -1468,63 +1468,85 @@
                     document.head.appendChild(s);
                 });
 
-                // توليد ملف PDF ومشاركته/حفظه — يشتغل حتى داخل تطبيق الشاشة الرئيسية (PWA)
-                const generatePdf = async () => {
-                    if (!pdfBtn) return;
-                    const originalLabel = pdfBtn.textContent;
-                    pdfBtn.disabled = true; pdfBtn.textContent = '⏳ جاري تجهيز الملف...';
-                    try {
-                        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
-                        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
-                        const jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
-                        const pdf = new jsPDFCtor('p', 'mm', 'a4');
-                        const pageW = pdf.internal.pageSize.getWidth();
-                        const pageH = pdf.internal.pageSize.getHeight();
-                        const margin = 8;
-                        const usableW = pageW - margin * 2;
-                        const usableH = pageH - margin * 2;
+                // بناء ملف PDF من أقسام الصفحة (القائمة المجمّعة + كل أوردر على صفحة)
+                const buildPdfFile = async () => {
+                    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+                    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+                    const jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
+                    const pdf = new jsPDFCtor('p', 'mm', 'a4');
+                    const pageW = pdf.internal.pageSize.getWidth();
+                    const pageH = pdf.internal.pageSize.getHeight();
+                    const margin = 8;
+                    const usableW = pageW - margin * 2;
+                    const usableH = pageH - margin * 2;
 
-                        // كل قسم (القائمة المجمّعة + كل أوردر) على صفحة مستقلة
-                        const blocks = Array.from(root.children).filter(el => !el.classList || !el.classList.contains('no-print'));
-                        let firstBlock = true;
-                        for (const block of blocks) {
-                            const canvas = await window.html2canvas(block, { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false });
-                            const imgData = canvas.toDataURL('image/jpeg', 0.92);
-                            const imgH = usableW * canvas.height / canvas.width;
-                            if (!firstBlock) pdf.addPage();
-                            firstBlock = false;
-                            let heightLeft = imgH; let position = 0;
-                            pdf.addImage(imgData, 'JPEG', margin, margin, usableW, imgH);
+                    const blocks = Array.from(root.children).filter(el => !el.classList || !el.classList.contains('no-print'));
+                    let firstBlock = true;
+                    for (const block of blocks) {
+                        const canvas = await window.html2canvas(block, { scale: 2, useCORS: true, allowTaint: false, imageTimeout: 15000, backgroundColor: '#ffffff', logging: false });
+                        const imgData = canvas.toDataURL('image/jpeg', 0.92);
+                        const imgH = usableW * canvas.height / canvas.width;
+                        if (!firstBlock) pdf.addPage();
+                        firstBlock = false;
+                        let heightLeft = imgH; let position = 0;
+                        pdf.addImage(imgData, 'JPEG', margin, margin, usableW, imgH);
+                        heightLeft -= usableH;
+                        while (heightLeft > 0.5) {
+                            position -= usableH;
+                            pdf.addPage();
+                            pdf.addImage(imgData, 'JPEG', margin, margin + position, usableW, imgH);
                             heightLeft -= usableH;
-                            while (heightLeft > 0.5) {
-                                position -= usableH;
-                                pdf.addPage();
-                                pdf.addImage(imgData, 'JPEG', margin, margin + position, usableW, imgH);
-                                heightLeft -= usableH;
-                            }
                         }
+                    }
+                    const fileName = `قائمة-تجهيز-${new Date().toISOString().slice(0, 10)}.pdf`;
+                    const blob = pdf.output('blob');
+                    return { blob, file: new File([blob], fileName, { type: 'application/pdf' }), fileName };
+                };
 
-                        const fileName = `قائمة-تجهيز-${new Date().toISOString().slice(0, 10)}.pdf`;
-                        const blob = pdf.output('blob');
-                        const file = new File([blob], fileName, { type: 'application/pdf' });
-
-                        // مشاركة الملف (يفتح قائمة الحفظ/الطباعة على الآيفون) أو فتحه في تبويب
-                        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                            await navigator.share({ files: [file], title: 'قائمة تجهيز' });
-                        } else {
-                            const url = URL.createObjectURL(blob);
-                            const opened = window.open(url, '_blank');
-                            if (!opened) window.location.href = url;
-                            setTimeout(() => URL.revokeObjectURL(url), 60000);
+                // نظام خطوتين: (1) تجهيز الملف  ثم  (2) مشاركة/حفظ بضغطة منفصلة (مهم للآيفون)
+                let pdfReady = null; // { blob, file, fileName }
+                const sharePdf = async () => {
+                    if (!pdfReady) return;
+                    // المشاركة لازم تحصل داخل ضغطة المستخدم — بدون await قبلها
+                    if (navigator.canShare && navigator.canShare({ files: [pdfReady.file] })) {
+                        try {
+                            await navigator.share({ files: [pdfReady.file], title: 'قائمة تجهيز' });
+                            return;
+                        } catch (e) {
+                            if (e && e.name === 'AbortError') return; // المستخدم قفل القائمة
+                            // غير كده: نكمل على الرابط المباشر تحت
                         }
+                    }
+                    // بديل: افتح الملف في عارض (بدون ما يخرجك من التطبيق) عبر رابط جاهز
+                    const link = root.querySelector('[data-pdflink]');
+                    if (link) link.click();
+                };
+
+                const onPdfBtn = async () => {
+                    if (!pdfBtn) return;
+                    if (pdfReady) { sharePdf(); return; } // الملف جاهز → شارك مباشرة (ضغطة المستخدم)
+                    pdfBtn.disabled = true;
+                    const original = pdfBtn.textContent;
+                    pdfBtn.textContent = '⏳ جاري تجهيز الملف...';
+                    try {
+                        pdfReady = await buildPdfFile();
+                        const url = URL.createObjectURL(pdfReady.blob);
+                        // رابط مباشر ظاهر كبديل مضمون (فتح/حفظ في عارض الآيفون)
+                        const a = document.createElement('a');
+                        a.setAttribute('data-pdflink', '');
+                        a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.download = pdfReady.fileName;
+                        a.textContent = '📥 فتح / حفظ الملف';
+                        a.style.cssText = "background:#0ea5e9;color:#fff;border-radius:10px;padding:12px 22px;font-size:15px;font-weight:800;text-decoration:none;font-family:'Cairo',Arial,sans-serif;";
+                        pdfBtn.textContent = '📤 مشاركة الملف';
+                        pdfBtn.disabled = false;
+                        pdfBtn.insertAdjacentElement('afterend', a);
                     } catch (e) {
-                        if (e && e.name === 'AbortError') { /* المستخدم ألغى المشاركة */ }
-                        else notify('تعذّر إنشاء PDF: ' + (e && e.message ? e.message : e));
-                    } finally {
-                        pdfBtn.disabled = false; pdfBtn.textContent = originalLabel;
+                        pdfBtn.textContent = original;
+                        pdfBtn.disabled = false;
+                        notify('تعذّر إنشاء PDF: ' + (e && e.message ? e.message : e));
                     }
                 };
-                if (pdfBtn) pdfBtn.addEventListener('click', generatePdf);
+                if (pdfBtn) pdfBtn.addEventListener('click', onPdfBtn);
             };
 
             const parseCSV = (text) => {
@@ -2417,7 +2439,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.55</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.56</span>
                             </div>
                         </nav>
                     </aside>
