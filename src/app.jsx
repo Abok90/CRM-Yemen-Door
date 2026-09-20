@@ -1420,9 +1420,10 @@
                 }).join('');
 
                 // نعرض القائمة كطبقة داخل نفس الصفحة (أضمن من نافذة منفصلة على الموبايل/الآيفون)
-                const toolbar = `<div class="no-print" style="position:sticky;top:0;z-index:5;background:#0f172a;display:flex;gap:10px;justify-content:center;align-items:center;padding:12px;box-shadow:0 2px 10px rgba(0,0,0,.25);">
-                    <button data-print style="background:#14b8a6;color:#fff;border:none;border-radius:10px;padding:12px 30px;font-size:16px;font-weight:800;cursor:pointer;font-family:'Cairo',Arial,sans-serif;">🖨️ طباعة / حفظ PDF</button>
-                    <button data-close style="background:#334155;color:#fff;border:none;border-radius:10px;padding:12px 20px;font-size:14px;font-weight:700;cursor:pointer;font-family:'Cairo',Arial,sans-serif;">إغلاق</button>
+                const toolbar = `<div class="no-print" style="position:sticky;top:0;z-index:5;background:#0f172a;display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center;padding:12px;box-shadow:0 2px 10px rgba(0,0,0,.25);">
+                    <button data-pdf style="background:#e11d48;color:#fff;border:none;border-radius:10px;padding:12px 26px;font-size:16px;font-weight:800;cursor:pointer;font-family:'Cairo',Arial,sans-serif;">📄 حفظ / مشاركة PDF</button>
+                    <button data-print style="background:#14b8a6;color:#fff;border:none;border-radius:10px;padding:12px 22px;font-size:15px;font-weight:800;cursor:pointer;font-family:'Cairo',Arial,sans-serif;">🖨️ طباعة</button>
+                    <button data-close style="background:#334155;color:#fff;border:none;border-radius:10px;padding:12px 18px;font-size:14px;font-weight:700;cursor:pointer;font-family:'Cairo',Arial,sans-serif;">إغلاق</button>
                 </div>`;
 
                 // إزالة أي نسخة سابقة
@@ -1455,8 +1456,75 @@
                 document.body.style.overflow = 'hidden';
                 const printBtn = root.querySelector('[data-print]');
                 const closeBtn = root.querySelector('[data-close]');
+                const pdfBtn = root.querySelector('[data-pdf]');
                 if (printBtn) printBtn.addEventListener('click', () => window.print());
                 if (closeBtn) closeBtn.addEventListener('click', closeOverlay);
+
+                // تحميل مكتبة عند الحاجة فقط (عشان بداية التطبيق تفضل سريعة)
+                const loadScript = (src) => new Promise((resolve, reject) => {
+                    if (Array.from(document.scripts).some(s => s.src === src)) return resolve();
+                    const s = document.createElement('script');
+                    s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('فشل تحميل ' + src));
+                    document.head.appendChild(s);
+                });
+
+                // توليد ملف PDF ومشاركته/حفظه — يشتغل حتى داخل تطبيق الشاشة الرئيسية (PWA)
+                const generatePdf = async () => {
+                    if (!pdfBtn) return;
+                    const originalLabel = pdfBtn.textContent;
+                    pdfBtn.disabled = true; pdfBtn.textContent = '⏳ جاري تجهيز الملف...';
+                    try {
+                        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+                        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+                        const jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
+                        const pdf = new jsPDFCtor('p', 'mm', 'a4');
+                        const pageW = pdf.internal.pageSize.getWidth();
+                        const pageH = pdf.internal.pageSize.getHeight();
+                        const margin = 8;
+                        const usableW = pageW - margin * 2;
+                        const usableH = pageH - margin * 2;
+
+                        // كل قسم (القائمة المجمّعة + كل أوردر) على صفحة مستقلة
+                        const blocks = Array.from(root.children).filter(el => !el.classList || !el.classList.contains('no-print'));
+                        let firstBlock = true;
+                        for (const block of blocks) {
+                            const canvas = await window.html2canvas(block, { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false });
+                            const imgData = canvas.toDataURL('image/jpeg', 0.92);
+                            const imgH = usableW * canvas.height / canvas.width;
+                            if (!firstBlock) pdf.addPage();
+                            firstBlock = false;
+                            let heightLeft = imgH; let position = 0;
+                            pdf.addImage(imgData, 'JPEG', margin, margin, usableW, imgH);
+                            heightLeft -= usableH;
+                            while (heightLeft > 0.5) {
+                                position -= usableH;
+                                pdf.addPage();
+                                pdf.addImage(imgData, 'JPEG', margin, margin + position, usableW, imgH);
+                                heightLeft -= usableH;
+                            }
+                        }
+
+                        const fileName = `قائمة-تجهيز-${new Date().toISOString().slice(0, 10)}.pdf`;
+                        const blob = pdf.output('blob');
+                        const file = new File([blob], fileName, { type: 'application/pdf' });
+
+                        // مشاركة الملف (يفتح قائمة الحفظ/الطباعة على الآيفون) أو فتحه في تبويب
+                        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                            await navigator.share({ files: [file], title: 'قائمة تجهيز' });
+                        } else {
+                            const url = URL.createObjectURL(blob);
+                            const opened = window.open(url, '_blank');
+                            if (!opened) window.location.href = url;
+                            setTimeout(() => URL.revokeObjectURL(url), 60000);
+                        }
+                    } catch (e) {
+                        if (e && e.name === 'AbortError') { /* المستخدم ألغى المشاركة */ }
+                        else notify('تعذّر إنشاء PDF: ' + (e && e.message ? e.message : e));
+                    } finally {
+                        pdfBtn.disabled = false; pdfBtn.textContent = originalLabel;
+                    }
+                };
+                if (pdfBtn) pdfBtn.addEventListener('click', generatePdf);
             };
 
             const parseCSV = (text) => {
@@ -2349,7 +2417,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.54</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.55</span>
                             </div>
                         </nav>
                     </aside>
