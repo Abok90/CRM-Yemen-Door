@@ -1420,11 +1420,15 @@
                 }).join('');
 
                 const win = window.open('', '_blank');
-                win.document.write(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><title>قائمة تجهيز</title>
+                const toolbar = `<div class="no-print" style="position:sticky;top:0;z-index:9999;background:#0f172a;display:flex;gap:10px;justify-content:center;align-items:center;padding:12px;box-shadow:0 2px 10px rgba(0,0,0,.25);">
+                    <button onclick="window.print()" style="background:#14b8a6;color:#fff;border:none;border-radius:10px;padding:12px 30px;font-size:16px;font-weight:800;cursor:pointer;font-family:'Cairo',Arial,sans-serif;">🖨️ طباعة / حفظ PDF</button>
+                    <button onclick="window.close()" style="background:#334155;color:#fff;border:none;border-radius:10px;padding:12px 20px;font-size:14px;font-weight:700;cursor:pointer;font-family:'Cairo',Arial,sans-serif;">إغلاق</button>
+                </div>`;
+                win.document.write(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>قائمة تجهيز</title>
                     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
-                    <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:'Cairo',Arial,sans-serif;direction:rtl;background:white;}thead th{background:#f8fafc;}@media print{@page{size:A4 portrait;margin:12mm;}tr{break-inside:avoid;}}</style>
-                    <script>window.onload=function(){var imgs=Array.prototype.slice.call(document.images);var pending=imgs.filter(function(i){return !i.complete;}).length;function go(){setTimeout(function(){window.focus();window.print();},350);}if(pending===0){go();return;}function done(){pending--;if(pending<=0)go();}imgs.forEach(function(i){if(!i.complete){i.addEventListener('load',done);i.addEventListener('error',done);}});setTimeout(go,Math.min(15000,4000+imgs.length*120));};<\/script>
-                    </head><body>${html}${ordersHtml}</body></html>`);
+                    <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:'Cairo',Arial,sans-serif;direction:rtl;background:white;}thead th{background:#f8fafc;}@media print{@page{size:A4 portrait;margin:12mm;}tr{break-inside:avoid;}.no-print{display:none!important;}}</style>
+                    <script>window.onload=function(){var isTouch=('ontouchstart' in window)||(navigator.maxTouchPoints>0);if(isTouch)return;var imgs=Array.prototype.slice.call(document.images);var pending=imgs.filter(function(i){return !i.complete;}).length;function go(){setTimeout(function(){window.focus();window.print();},350);}if(pending===0){go();return;}function done(){pending--;if(pending<=0)go();}imgs.forEach(function(i){if(!i.complete){i.addEventListener('load',done);i.addEventListener('error',done);}});setTimeout(go,Math.min(15000,4000+imgs.length*120));};<\/script>
+                    </head><body>${toolbar}${html}${ordersHtml}</body></html>`);
                 win.document.close();
                 win.focus();
             };
@@ -2319,7 +2323,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.52</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.53</span>
                             </div>
                         </nav>
                     </aside>
