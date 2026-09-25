@@ -361,6 +361,31 @@
                 } catch (error) { notify('تعذر تحميل الأوردرات. تحقق من الاتصال وأعد المحاولة.'); }
             }, [user, loadAllHistory]);
 
+            // تحويل أي أرقام عربية (٠-٩) أو فارسية (۰-۹) إلى إنجليزية تلقائياً في كل خانات الكتابة
+            useEffect(() => {
+                const convertDigits = (str) => str
+                    .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x0660))
+                    .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06F0));
+                const handler = (e) => {
+                    const el = e.target;
+                    if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA')) return;
+                    if (el.type === 'password' || el.type === 'email') return;
+                    const v = el.value;
+                    if (!v || !/[٠-٩۰-۹]/.test(v)) return;
+                    const nv = convertDigits(v);
+                    if (nv === v) return;
+                    let start = null, end = null;
+                    try { start = el.selectionStart; end = el.selectionEnd; } catch (_) {}
+                    const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+                    const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+                    setter.call(el, nv);
+                    el.dispatchEvent(new Event('input', { bubbles: true })); // عشان React يمسك القيمة الجديدة
+                    if (start !== null) { try { el.setSelectionRange(start, end); } catch (_) {} }
+                };
+                document.addEventListener('input', handler, true);
+                return () => document.removeEventListener('input', handler, true);
+            }, []);
+
             const fetchUsersList = async () => {
                 try {
                     const { data, error } = await supabase.from('user_roles').select('*');
@@ -1324,44 +1349,44 @@
 
                 const rowsHtml = items.map((it, idx) => `
                     <tr style="border-bottom:1px solid #e5e7eb;${idx % 2 === 1 ? 'background:#fafafa;' : ''}break-inside:avoid;">
-                        <td style="padding:8px;text-align:center;width:74px;">
-                            <div style="position:relative;width:58px;height:58px;margin:0 auto;">
-                                <div style="position:absolute;inset:0;border-radius:8px;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:8px;text-align:center;">بدون صورة</div>
-                                ${it.image ? `<img src="${escapeHtml(it.image)}" referrerpolicy="no-referrer" loading="eager" onerror="this.style.display='none'" style="position:absolute;inset:0;width:58px;height:58px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;background:#fff;" />` : ''}
+                        <td style="padding:11px 8px;text-align:center;width:78px;">
+                            <div style="position:relative;width:62px;height:62px;margin:0 auto;">
+                                <div style="position:absolute;inset:0;border-radius:8px;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:9px;text-align:center;">بدون صورة</div>
+                                ${it.image ? `<img src="${escapeHtml(it.image)}" referrerpolicy="no-referrer" loading="eager" onerror="this.style.display='none'" style="position:absolute;inset:0;width:62px;height:62px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;background:#fff;" />` : ''}
                             </div>
                         </td>
-                        <td style="padding:8px 10px;font-size:12px;font-weight:700;color:#111827;line-height:1.5;">${escapeHtml(it.name)}</td>
-                        <td style="padding:8px 10px;font-size:11px;color:#374151;">${escapeHtml(it.variant || '—')}</td>
-                        <td style="padding:8px 10px;text-align:center;font-size:15px;font-weight:900;color:#0f172a;">${it.qty}</td>
-                        <td style="padding:8px 10px;font-size:10px;color:#6b7280;line-height:1.6;">${escapeHtml(it.orders.join('، '))}</td>
+                        <td style="padding:11px 12px;font-size:17px;font-weight:800;color:#0f172a;line-height:1.5;">${escapeHtml(it.name)}</td>
+                        <td style="padding:11px 12px;font-size:15px;font-weight:700;color:#1f2937;white-space:nowrap;">${escapeHtml(toEnglishDigits(it.variant) || '—')}</td>
+                        <td style="padding:11px 12px;text-align:center;font-size:24px;font-weight:900;color:#000;">${it.qty}</td>
+                        <td style="padding:11px 12px;font-size:14px;font-weight:600;color:#374151;line-height:1.7;">${escapeHtml(toEnglishDigits(it.orders.join('، ')))}</td>
                     </tr>`).join('');
 
                 const html = `<div style="padding:24px;font-family:'Cairo',Arial,sans-serif;direction:rtl;">
-                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
                         <div>
-                            <div style="font-size:26px;font-weight:900;color:#0f172a;">قائمة تجهيز</div>
-                            <div style="font-size:12px;color:#64748b;margin-top:4px;">إجمالي القطع: ${totalQty} &nbsp;•&nbsp; عدد الأصناف: ${items.length} &nbsp;•&nbsp; عدد الأوردرات: ${toPrint.length}</div>
+                            <div style="font-size:32px;font-weight:900;color:#0f172a;">قائمة تجهيز</div>
+                            <div style="font-size:16px;font-weight:700;color:#334155;margin-top:6px;">إجمالي القطع: ${totalQty} &nbsp;•&nbsp; عدد الأصناف: ${items.length} &nbsp;•&nbsp; عدد الأوردرات: ${toPrint.length}</div>
                         </div>
-                        <div style="text-align:left;font-size:12px;color:#64748b;">
-                            <div style="font-weight:700;color:#0f172a;">يمن دور</div>
-                            <div>${new Date().toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
+                        <div style="text-align:left;font-size:15px;color:#334155;">
+                            <div style="font-weight:900;color:#0f172a;font-size:17px;">يمن دور</div>
+                            <div>${toEnglishDigits(new Date().toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' }))}</div>
                         </div>
                     </div>
                     <table style="width:100%;border-collapse:collapse;">
                         <thead style="display:table-header-group;">
-                            <tr style="border-bottom:2px solid #0f172a;">
-                                <th style="padding:8px;font-size:11px;text-align:center;color:#0f172a;">الصورة</th>
-                                <th style="padding:8px 10px;font-size:11px;text-align:right;color:#0f172a;">المنتج</th>
-                                <th style="padding:8px 10px;font-size:11px;text-align:right;color:#0f172a;">المتغير</th>
-                                <th style="padding:8px 10px;font-size:11px;text-align:center;color:#0f172a;">الكمية</th>
-                                <th style="padding:8px 10px;font-size:11px;text-align:right;color:#0f172a;">الأوردرات</th>
+                            <tr style="border-bottom:2.5px solid #0f172a;background:#f1f5f9;">
+                                <th style="padding:11px 8px;font-size:15px;font-weight:800;text-align:center;color:#0f172a;">الصورة</th>
+                                <th style="padding:11px 12px;font-size:15px;font-weight:800;text-align:right;color:#0f172a;">المنتج</th>
+                                <th style="padding:11px 12px;font-size:15px;font-weight:800;text-align:right;color:#0f172a;">المتغير</th>
+                                <th style="padding:11px 12px;font-size:15px;font-weight:800;text-align:center;color:#0f172a;">الكمية</th>
+                                <th style="padding:11px 12px;font-size:15px;font-weight:800;text-align:right;color:#0f172a;">الأوردرات</th>
                             </tr>
                         </thead>
                         <tbody>${rowsHtml}</tbody>
                         <tfoot>
-                            <tr style="border-top:2px solid #0f172a;">
-                                <td colspan="3" style="padding:10px;font-size:13px;font-weight:900;text-align:left;color:#0f172a;">الإجمالي</td>
-                                <td style="padding:10px;font-size:15px;font-weight:900;text-align:center;color:#0f172a;">${totalQty}</td>
+                            <tr style="border-top:2.5px solid #0f172a;">
+                                <td colspan="3" style="padding:12px;font-size:18px;font-weight:900;text-align:left;color:#0f172a;">الإجمالي</td>
+                                <td style="padding:12px;font-size:24px;font-weight:900;text-align:center;color:#000;">${totalQty}</td>
                                 <td></td>
                             </tr>
                         </tfoot>
@@ -1370,7 +1395,7 @@
 
                 // قسم تفصيلي: كل أوردر لوحده في صفحة ببياناته وأصنافه (بوليصة تجهيز)
                 const statusColors = { 'جاري التحضير': '#0ea5e9', 'تم': '#22c55e', 'الشحن': '#f97316', 'مراجعة': '#eab308', 'تاجيل': '#94a3b8', 'استبدال': '#8b5cf6', 'مرتجع': '#f43f5e', 'الغاء': '#ef4444', 'اعادة ارسال': '#6366f1', 'خارجي': '#14b8a6' };
-                const infoRow = (label, val) => val ? `<div style="font-size:12px;color:#334155;margin-bottom:4px;"><span style="color:#94a3b8;font-weight:700;">${label}:</span> <span style="font-weight:700;">${escapeHtml(val)}</span></div>` : '';
+                const infoRow = (label, val) => val ? `<div style="font-size:16px;color:#1f2937;margin-bottom:6px;"><span style="color:#64748b;font-weight:700;">${label}:</span> <span style="font-weight:800;">${escapeHtml(toEnglishDigits(val))}</span></div>` : '';
 
                 const ordersHtml = perOrder.map(({ order: o, items: its }) => {
                     const color = statusColors[o.status] || '#64748b';
@@ -1379,43 +1404,43 @@
                     const total = prod + ship;
                     const itemRows = its.length ? its.map((it, i) => `
                         <tr style="border-bottom:1px solid #eef2f7;${i % 2 === 1 ? 'background:#fafafa;' : ''}break-inside:avoid;">
-                            <td style="padding:7px;text-align:center;width:64px;">${imgBox(it.image, 50)}</td>
-                            <td style="padding:7px 10px;font-size:12px;font-weight:700;color:#111827;line-height:1.5;">${escapeHtml(it.name)}</td>
-                            <td style="padding:7px 10px;font-size:11px;color:#374151;">${escapeHtml(it.variant || '—')}</td>
-                            <td style="padding:7px 10px;text-align:center;font-size:14px;font-weight:900;color:#0f172a;">${it.qty}</td>
-                        </tr>`).join('') : `<tr><td colspan="4" style="padding:12px;text-align:center;color:#94a3b8;font-size:12px;">${escapeHtml(o.item || 'لا توجد أصناف')}</td></tr>`;
+                            <td style="padding:9px 7px;text-align:center;width:66px;">${imgBox(it.image, 54)}</td>
+                            <td style="padding:9px 12px;font-size:17px;font-weight:800;color:#0f172a;line-height:1.5;">${escapeHtml(it.name)}</td>
+                            <td style="padding:9px 12px;font-size:15px;font-weight:700;color:#1f2937;white-space:nowrap;">${escapeHtml(toEnglishDigits(it.variant) || '—')}</td>
+                            <td style="padding:9px 12px;text-align:center;font-size:22px;font-weight:900;color:#000;">${it.qty}</td>
+                        </tr>`).join('') : `<tr><td colspan="4" style="padding:14px;text-align:center;color:#94a3b8;font-size:15px;">${escapeHtml(o.item || 'لا توجد أصناف')}</td></tr>`;
 
                     return `<div style="page-break-before:always;padding:24px;font-family:'Cairo',Arial,sans-serif;direction:rtl;">
-                        <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0f172a;padding-bottom:10px;margin-bottom:12px;">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2.5px solid #0f172a;padding-bottom:12px;margin-bottom:16px;">
                             <div>
-                                <div style="font-size:22px;font-weight:900;color:#0f172a;">أوردر ${escapeHtml(o.id)}</div>
-                                <div style="font-size:11px;color:#64748b;margin-top:3px;">${escapeHtml(o.date || '')}${o.page ? ' • ' + escapeHtml(o.page) : ''}</div>
+                                <div style="font-size:28px;font-weight:900;color:#0f172a;">أوردر ${escapeHtml(toEnglishDigits(o.id))}</div>
+                                <div style="font-size:15px;color:#64748b;margin-top:5px;">${escapeHtml(toEnglishDigits(o.date || ''))}${o.page ? ' • ' + escapeHtml(o.page) : ''}</div>
                             </div>
-                            <span style="background:${color}18;color:${color};border:1px solid ${color}55;border-radius:8px;padding:3px 10px;font-size:11px;font-weight:800;white-space:nowrap;">${escapeHtml(o.status || '')}</span>
+                            <span style="background:${color}18;color:${color};border:1.5px solid ${color}66;border-radius:8px;padding:5px 14px;font-size:15px;font-weight:900;white-space:nowrap;">${escapeHtml(o.status || '')}</span>
                         </div>
-                        <div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:14px;flex-wrap:wrap;">
-                            <div style="flex:1;min-width:220px;">
+                        <div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap;">
+                            <div style="flex:1;min-width:240px;">
                                 ${infoRow('الاسم', o.customer)}
                                 ${infoRow('الموبايل', o.phone)}
                                 ${infoRow('العنوان', o.address)}
                                 ${infoRow('البوليصة', o.trackingNumber)}
                             </div>
-                            <div style="text-align:left;min-width:160px;">
-                                <div style="font-size:12px;color:#334155;margin-bottom:4px;"><span style="color:#94a3b8;font-weight:700;">سعر المنتجات:</span> <span style="font-weight:700;">${prod} ج.م</span></div>
-                                <div style="font-size:12px;color:#334155;margin-bottom:4px;"><span style="color:#94a3b8;font-weight:700;">الشحن:</span> <span style="font-weight:700;">${ship} ج.م</span></div>
-                                <div style="font-size:16px;color:#0f172a;margin-top:6px;font-weight:900;">الإجمالي: ${total} ج.م</div>
+                            <div style="text-align:left;min-width:180px;">
+                                <div style="font-size:16px;color:#1f2937;margin-bottom:6px;"><span style="color:#64748b;font-weight:700;">سعر المنتجات:</span> <span style="font-weight:800;">${toEnglishDigits(prod)} ج.م</span></div>
+                                <div style="font-size:16px;color:#1f2937;margin-bottom:6px;"><span style="color:#64748b;font-weight:700;">الشحن:</span> <span style="font-weight:800;">${toEnglishDigits(ship)} ج.م</span></div>
+                                <div style="font-size:22px;color:#000;margin-top:8px;font-weight:900;">الإجمالي: ${toEnglishDigits(total)} ج.م</div>
                             </div>
                         </div>
                         <table style="width:100%;border-collapse:collapse;">
-                            <thead style="display:table-header-group;"><tr style="border-bottom:1.5px solid #0f172a;">
-                                <th style="padding:7px;font-size:11px;text-align:center;color:#0f172a;">الصورة</th>
-                                <th style="padding:7px 10px;font-size:11px;text-align:right;color:#0f172a;">المنتج</th>
-                                <th style="padding:7px 10px;font-size:11px;text-align:right;color:#0f172a;">المتغير</th>
-                                <th style="padding:7px 10px;font-size:11px;text-align:center;color:#0f172a;">الكمية</th>
+                            <thead style="display:table-header-group;"><tr style="border-bottom:2px solid #0f172a;background:#f1f5f9;">
+                                <th style="padding:9px 7px;font-size:14px;font-weight:800;text-align:center;color:#0f172a;">الصورة</th>
+                                <th style="padding:9px 12px;font-size:14px;font-weight:800;text-align:right;color:#0f172a;">المنتج</th>
+                                <th style="padding:9px 12px;font-size:14px;font-weight:800;text-align:right;color:#0f172a;">المتغير</th>
+                                <th style="padding:9px 12px;font-size:14px;font-weight:800;text-align:center;color:#0f172a;">الكمية</th>
                             </tr></thead>
                             <tbody>${itemRows}</tbody>
                         </table>
-                        ${o.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:11px;color:#92400e;"><b>ملاحظات:</b> ${escapeHtml(o.notes)}</div>` : ''}
+                        ${o.notes ? `<div style="margin-top:14px;padding:10px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:14px;color:#92400e;"><b>ملاحظات:</b> ${escapeHtml(toEnglishDigits(o.notes))}</div>` : ''}
                     </div>`;
                 }).join('');
 
@@ -1944,6 +1969,11 @@
                     if (isEditing) {
                         if (originalOrderData) saveUndoEntry(originalOrderId, 'edit', originalOrderData);
                         await savePayload(orderPayload, true, originalOrderId, finalOrderId);
+                        // تحديث فوري للواجهة (بدون انتظار إعادة التحميل) عشان التغيير يبان لحظياً
+                        const mergedOrder = { ...(originalOrderData || {}), ...orderPayload };
+                        setOrders(prev => prev.map(o => o.id === originalOrderId ? mergedOrder : o));
+                        ordersRef.current = ordersRef.current.map(o => o.id === originalOrderId ? mergedOrder : o);
+                        if (viewOrder && viewOrder.id === originalOrderId) setViewOrder(mergedOrder);
                         let changes = [];
                         if(originalOrderData) {
                             if(originalOrderData.status !== orderPayload.status) changes.push(`الحالة من [${originalOrderData.status}] إلى [${orderPayload.status}]`);
@@ -2439,7 +2469,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.56</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.57</span>
                             </div>
                         </nav>
                     </aside>
