@@ -1493,12 +1493,12 @@
                     document.head.appendChild(s);
                 });
 
-                // بناء ملف PDF من أقسام الصفحة (القائمة المجمّعة + كل أوردر على صفحة)
+                // بناء ملف PDF من أقسام الصفحة (القائمة المجمّعة + كل أوردر على صفحة) — بحجم صغير للواتساب
                 const buildPdfFile = async () => {
                     await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
                     await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
                     const jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
-                    const pdf = new jsPDFCtor('p', 'mm', 'a4');
+                    const pdf = new jsPDFCtor({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
                     const pageW = pdf.internal.pageSize.getWidth();
                     const pageH = pdf.internal.pageSize.getHeight();
                     const margin = 8;
@@ -1508,18 +1508,19 @@
                     const blocks = Array.from(root.children).filter(el => !el.classList || !el.classList.contains('no-print'));
                     let firstBlock = true;
                     for (const block of blocks) {
-                        const canvas = await window.html2canvas(block, { scale: 2, useCORS: true, allowTaint: false, imageTimeout: 15000, backgroundColor: '#ffffff', logging: false });
-                        const imgData = canvas.toDataURL('image/jpeg', 0.92);
+                        // دقة أقل + ضغط JPEG أعلى = ملف أصغر بكثير (الخط كبير فيفضل واضح)
+                        const canvas = await window.html2canvas(block, { scale: 1.35, useCORS: true, allowTaint: false, imageTimeout: 15000, backgroundColor: '#ffffff', logging: false });
+                        const imgData = canvas.toDataURL('image/jpeg', 0.55);
                         const imgH = usableW * canvas.height / canvas.width;
                         if (!firstBlock) pdf.addPage();
                         firstBlock = false;
                         let heightLeft = imgH; let position = 0;
-                        pdf.addImage(imgData, 'JPEG', margin, margin, usableW, imgH);
+                        pdf.addImage(imgData, 'JPEG', margin, margin, usableW, imgH, undefined, 'FAST');
                         heightLeft -= usableH;
                         while (heightLeft > 0.5) {
                             position -= usableH;
                             pdf.addPage();
-                            pdf.addImage(imgData, 'JPEG', margin, margin + position, usableW, imgH);
+                            pdf.addImage(imgData, 'JPEG', margin, margin + position, usableW, imgH, undefined, 'FAST');
                             heightLeft -= usableH;
                         }
                     }
@@ -2469,7 +2470,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.57</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.58</span>
                             </div>
                         </nav>
                     </aside>
