@@ -18,6 +18,30 @@ function findNoteAttr(noteAttrs, keys) {
   return '';
 }
 
+// يجمّع العنوان الكامل من كل الحقول المتاحة (تفاصيل + مدينة + منطقة/محافظة + رمز)
+// مع تفضيل عنوان الشحن ثم الفوترة ثم عنوان العميل الافتراضي
+function buildFullAddress(s, b, d, noteAttrs) {
+  const pieces = (a) => {
+    if (!a) return [];
+    return [a.address1, a.address2, a.city, a.province, a.zip]
+      .map(x => (x == null ? '' : String(x)).trim())
+      .filter(Boolean);
+  };
+  let parts = pieces(s);
+  if (parts.length === 0) parts = pieces(b);
+  if (parts.length === 0) parts = pieces(d);
+
+  const seen = new Set();
+  const uniq = [];
+  for (const p of parts) {
+    const k = p.toLowerCase();
+    if (!seen.has(k)) { seen.add(k); uniq.push(p); }
+  }
+  let full = uniq.join(' - ');
+  if (!full) full = findNoteAttr(noteAttrs, ['address', 'عنوان', 'العنوان', 'المنطقة']) || '';
+  return full;
+}
+
 function extractCustomer(order) {
   const b = order.billing_address || {};
   const s = order.shipping_address || {};
@@ -42,13 +66,8 @@ function extractCustomer(order) {
     ''
   );
 
-  const address =
-    s.address1 || b.address1 || d.address1 ||
-    (s.city ? `${s.city}${s.province ? ' - ' + s.province : ''}` : '') ||
-    (b.city ? `${b.city}${b.province ? ' - ' + b.province : ''}` : '') ||
-    d.city ||
-    findNoteAttr(noteAttrs, ['address', 'عنوان', 'العنوان', 'المنطقة']) ||
-    '';
+  // العنوان الكامل: نجمّع كل حقول العنوان بدل حقل واحد
+  const address = buildFullAddress(s, b, d, noteAttrs);
 
   return { customer, phone, address };
 }
