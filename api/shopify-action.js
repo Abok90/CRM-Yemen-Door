@@ -20,14 +20,24 @@ async function shopify(method, path, token, storeUrl, body) {
   return data;
 }
 
-async function fulfill(token, storeUrl, orderId) {
+// يعمل Fulfill لكل أجزاء الأوردر المفتوحة (open / in_progress) ويضيف رقم البوليصة لو موجود.
+// لو الأوردر متشحن قبل كده على شوبيفاي مفيش حاجة تتعمل (آمن لو اتنادى أكتر من مرة).
+async function fulfill(token, storeUrl, orderId, trackingNumber) {
   const { fulfillment_orders = [] } = await shopify('GET', `/orders/${orderId}/fulfillment_orders.json`, token, storeUrl);
-  for (const fo of fulfillment_orders) {
-    if (fo.status === 'open') {
-      await shopify('POST', '/fulfillments.json', token, storeUrl, {
-        fulfillment: { line_items_by_fulfillment_order: [{ fulfillment_order_id: fo.id }], notify_customer: false },
-      });
-    }
+  const pending = fulfillment_orders.filter(fo => fo.status === 'open' || fo.status === 'in_progress');
+  if (!pending.length) {
+    const blocked = fulfillment_orders.filter(fo => fo.status === 'on_hold' || fo.status === 'scheduled');
+    if (blocked.length) throw new Error(`الأوردر على شوبيفاي حالته ${blocked[0].status} ومينفعش يتشحن`);
+    return;
+  }
+  // كل fulfillment order في طلب لوحده (شوبيفاي بيرفض طلب واحد فيه أكتر من مخزن)
+  for (const fo of pending) {
+    const fulfillment = {
+      line_items_by_fulfillment_order: [{ fulfillment_order_id: fo.id }],
+      notify_customer: false,
+    };
+    if (trackingNumber) fulfillment.tracking_info = { number: String(trackingNumber) };
+    await shopify('POST', '/fulfillments.json', token, storeUrl, { fulfillment });
   }
 }
 
@@ -48,7 +58,7 @@ async function handler(req, res) {
     body = JSON.parse(raw.toString('utf8'));
   } catch { return res.status(400).json({ error: 'Invalid JSON' }); }
 
-  const { action, shopifyOrderId } = body || {};
+  const { action, shopifyOrderId, trackingNumber } = body || {};
   if (!action || !shopifyOrderId) return res.status(400).json({ error: 'Missing: action, shopifyOrderId' });
 
   const storeUrl = process.env.SHOPIFY_STORE_URL;
@@ -57,7 +67,7 @@ async function handler(req, res) {
 
   try {
     if (action === 'fulfill') {
-      await fulfill(token, storeUrl, shopifyOrderId);
+      await fulfill(token, storeUrl, shopifyOrderId, trackingNumber);
     } else if (action === 'cancel') {
       await shopify('POST', `/orders/${shopifyOrderId}/cancel.json`, token, storeUrl, {});
     } else if (action === 'complete') {
