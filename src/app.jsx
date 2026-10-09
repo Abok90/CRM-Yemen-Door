@@ -1229,8 +1229,9 @@
                 setTimeout(() => { win.print(); }, 400);
             };
 
-            // قائمة تجهيز (Pick List): تجميع المنتجات من الأوردرات المحددة مع صورة لكل منتج
-            const printPickList = () => {
+            // قائمة تجهيز (Pick List) + فاتورة لكل أوردر — بنفس شكل طباعة شوبيفاي
+            // الصفحات مبنية بمقاس A4 ثابت (794×1123px) عشان الـ PDF يطلع مظبوط حتى من الموبايل
+            const printPickList = async () => {
                 if (selectedOrders.length === 0) return;
                 const toPrint = filteredOrders.filter(o => selectedOrders.includes(o.id));
 
@@ -1256,12 +1257,11 @@
                     .trim();
 
                 const STOP = new Set(['default', 'title', 'the', 'and', 'gr', 'gm', 'ml', 'و', 'من', 'او', 'مع', 'اللون', 'المقاس', 'الحجم', 'color', 'size']);
-                // إزالة واو العطف الملتصقة بأداة التعريف (واللبان → اللبان) عشان المطابقة تنجح سواء كانت الواو منفصلة أو ملتصقة
                 const tokensOf = (s) => normAr(s).split(' ')
                     .map(t => t.replace(/^و(?=ال)/, ''))
                     .filter(t => t.length >= 2 && !STOP.has(t));
 
-                // مطابقة سطر المنتج بكتالوج المنتجات لجلب الصورة والاسم الأساسي
+                // مطابقة سطر المنتج بكتالوج المنتجات لجلب الصورة (للأوردرات اللي مش من شوبيفاي)
                 const matchProduct = (lineName) => {
                     const ln = normAr(lineName);
                     if (!ln) return null;
@@ -1273,7 +1273,6 @@
                         if (!pn) continue;
                         let score = 0;
                         if (ln.includes(pn) || pn.includes(ln)) {
-                            // احتواء كامل → أقوى مطابقة (نفضّل الاسم الأطول/الأكثر تحديداً)
                             score = 1000 + pn.length;
                         } else {
                             const pt = tokensOf(p.name);
@@ -1281,7 +1280,6 @@
                                 let shared = 0;
                                 for (const t of pt) if (lnToks.has(t)) shared++;
                                 const ratio = shared / pt.length;
-                                // تطابق أغلب كلمات اسم المنتج داخل السطر
                                 if (shared >= 2 && ratio >= 0.5) score = shared * 10 + ratio;
                                 else if (pt.length === 1 && shared === 1) score = 6;
                             }
@@ -1291,7 +1289,7 @@
                     return best;
                 };
 
-                // تحليل أسطر الأوردر إلى عناصر (اسم/متغير/صورة/كمية) مع مطابقة الكتالوج
+                // تحليل نص الأوردر إلى أصناف (احتياطي لما بيانات شوبيفاي مش متاحة)
                 const parseOrderItems = (o) => {
                     const lines = String(o.item || '').split('\n').map(l => l.trim()).filter(Boolean);
                     return lines.map((line) => {
@@ -1300,14 +1298,12 @@
                                   : (lines.length === 1 ? (Number(o.quantity) || 1) : 1);
                         const cleaned = cleanLine(line) || line;
                         const matched = matchProduct(cleaned);
-                        let name, variant, image;
+                        let title = cleaned, variant = '', image = '';
                         if (matched) {
-                            name = String(matched.name).trim();
+                            title = String(matched.name).trim();
                             image = matched.image || '';
-                            // المتغير = باقي السطر بعد إزالة اسم المنتج
                             let rest = cleaned.replace(new RegExp(matched.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '')
                                 .replace(/^[-–—:،,\s]+|[-–—:،,\s]+$/g, '').trim();
-                            // لو الإزالة المباشرة فشلت (اختلاف تشكيل)، حاول التقاط المقاس أو آخر مقطع بعد شرطة
                             if (!rest || rest === cleaned) {
                                 const sizeM = cleaned.match(/\d+\s*(?:gr|gm|g|ml|kg|جم|جرام|كجم|مل|لتر)\b/i);
                                 if (sizeM) rest = sizeM[0].trim();
@@ -1315,169 +1311,243 @@
                                 else rest = '';
                             }
                             variant = rest;
-                        } else {
-                            name = cleaned; variant = ''; image = '';
                         }
-                        return { name, variant, image, qty };
+                        return { title, variant, image, qty, unitPrice: null };
                     });
                 };
 
-                // تجميع العناصر عبر كل الأوردرات + الاحتفاظ بأصناف كل أوردر لطباعته منفرداً
-                const map = new Map();
-                const perOrder = [];
-                for (const o of toPrint) {
-                    const parsed = parseOrderItems(o);
-                    perOrder.push({ order: o, items: parsed });
-                    parsed.forEach(({ name, variant, image, qty }) => {
-                        const key = name + '||' + variant;
-                        if (!map.has(key)) map.set(key, { name, variant, image, qty: 0, orders: [] });
-                        const entry = map.get(key);
-                        entry.qty += qty;
-                        if (!entry.orders.includes(o.id)) entry.orders.push(o.id);
-                    });
+                // (1) بيانات شوبيفاي الحقيقية: أسعار الأصناف والمتغيرات والصور والعناوين
+                let shop = null;
+                const shopifyById = new Map();
+                const shopifyIds = toPrint.filter(o => o.shopify_order_id).map(o => String(o.shopify_order_id));
+                if (shopifyIds.length) {
+                    notify('⏳ جاري تحميل بيانات الأوردرات من شوبيفاي...', 'success');
+                    try {
+                        const { data: { session: sess } } = await supabase.auth.getSession();
+                        const r = await fetch('/api/shopify-print', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'x-crm-auth': sess?.access_token || '' },
+                            body: JSON.stringify({ ids: shopifyIds }),
+                        });
+                        const data = await r.json().catch(() => ({}));
+                        if (data.ok) {
+                            shop = data.shop;
+                            (data.orders || []).forEach(so => shopifyById.set(String(so.shopifyOrderId), so));
+                        } else {
+                            notify('تعذّر تحميل بيانات شوبيفاي — هتتطبع من بيانات السيستم: ' + (data.error || r.status), 'warning');
+                        }
+                    } catch (e) {
+                        notify('تعذّر الاتصال بشوبيفاي — هتتطبع من بيانات السيستم', 'warning');
+                    }
                 }
+                const storeName = (shop && shop.name) || 'Yemens Door';
+                const fromLines = (shop && shop.lines && shop.lines.length) ? shop.lines : [storeName];
 
-                const items = Array.from(map.values()).sort((a, b) => b.qty - a.qty || a.name.localeCompare(b.name, 'ar'));
-                if (items.length === 0) return;
-                const totalQty = items.reduce((s, i) => s + i.qty, 0);
-
-                // خلية صورة موحّدة: صورة المنتج فوق خلفية بديلة "بدون صورة"
-                const imgBox = (image, px) => `<div style="position:relative;width:${px}px;height:${px}px;margin:0 auto;">
-                    <div style="position:absolute;inset:0;border-radius:8px;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:8px;text-align:center;">بدون صورة</div>
-                    ${image ? `<img src="${escapeHtml(image)}" referrerpolicy="no-referrer" loading="eager" onerror="this.style.display='none'" style="position:absolute;inset:0;width:${px}px;height:${px}px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;background:#fff;" />` : ''}
-                </div>`;
-
-                const rowsHtml = items.map((it, idx) => `
-                    <tr style="border-bottom:1px solid #e5e7eb;${idx % 2 === 1 ? 'background:#fafafa;' : ''}break-inside:avoid;">
-                        <td style="padding:11px 8px;text-align:center;width:78px;">
-                            <div style="position:relative;width:62px;height:62px;margin:0 auto;">
-                                <div style="position:absolute;inset:0;border-radius:8px;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:9px;text-align:center;">بدون صورة</div>
-                                ${it.image ? `<img src="${escapeHtml(it.image)}" referrerpolicy="no-referrer" loading="eager" onerror="this.style.display='none'" style="position:absolute;inset:0;width:62px;height:62px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;background:#fff;" />` : ''}
-                            </div>
-                        </td>
-                        <td style="padding:11px 12px;font-size:17px;font-weight:800;color:#0f172a;line-height:1.5;">${escapeHtml(it.name)}</td>
-                        <td style="padding:11px 12px;font-size:15px;font-weight:700;color:#1f2937;white-space:nowrap;">${escapeHtml(toEnglishDigits(it.variant) || '—')}</td>
-                        <td style="padding:11px 12px;text-align:center;font-size:24px;font-weight:900;color:#000;">${it.qty}</td>
-                        <td style="padding:11px 12px;font-size:14px;font-weight:600;color:#374151;line-height:1.7;">${escapeHtml(toEnglishDigits(it.orders.join('، ')))}</td>
-                    </tr>`).join('');
-
-                const html = `<div style="padding:24px;font-family:'Cairo',Arial,sans-serif;direction:rtl;">
-                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
-                        <div>
-                            <div style="font-size:32px;font-weight:900;color:#0f172a;">قائمة تجهيز</div>
-                            <div style="font-size:16px;font-weight:700;color:#334155;margin-top:6px;">إجمالي القطع: ${totalQty} &nbsp;•&nbsp; عدد الأصناف: ${items.length} &nbsp;•&nbsp; عدد الأوردرات: ${toPrint.length}</div>
-                        </div>
-                        <div style="text-align:left;font-size:15px;color:#334155;">
-                            <div style="font-weight:900;color:#0f172a;font-size:17px;">يمن دور</div>
-                            <div>${toEnglishDigits(new Date().toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' }))}</div>
-                        </div>
-                    </div>
-                    <table style="width:100%;border-collapse:collapse;">
-                        <thead style="display:table-header-group;">
-                            <tr style="border-bottom:2.5px solid #0f172a;background:#f1f5f9;">
-                                <th style="padding:11px 8px;font-size:15px;font-weight:800;text-align:center;color:#0f172a;">الصورة</th>
-                                <th style="padding:11px 12px;font-size:15px;font-weight:800;text-align:right;color:#0f172a;">المنتج</th>
-                                <th style="padding:11px 12px;font-size:15px;font-weight:800;text-align:right;color:#0f172a;">المتغير</th>
-                                <th style="padding:11px 12px;font-size:15px;font-weight:800;text-align:center;color:#0f172a;">الكمية</th>
-                                <th style="padding:11px 12px;font-size:15px;font-weight:800;text-align:right;color:#0f172a;">الأوردرات</th>
-                            </tr>
-                        </thead>
-                        <tbody>${rowsHtml}</tbody>
-                        <tfoot>
-                            <tr style="border-top:2.5px solid #0f172a;">
-                                <td colspan="3" style="padding:12px;font-size:18px;font-weight:900;text-align:left;color:#0f172a;">الإجمالي</td>
-                                <td style="padding:12px;font-size:24px;font-weight:900;text-align:center;color:#000;">${totalQty}</td>
-                                <td></td>
-                            </tr>
-                        </tfoot>
-                    </table>
-                </div>`;
-
-                // قسم تفصيلي: كل أوردر لوحده في صفحة ببياناته وأصنافه (بوليصة تجهيز)
-                const statusColors = { 'جاري التحضير': '#0ea5e9', 'تم': '#22c55e', 'الشحن': '#f97316', 'مراجعة': '#eab308', 'تاجيل': '#94a3b8', 'استبدال': '#8b5cf6', 'مرتجع': '#f43f5e', 'الغاء': '#ef4444', 'اعادة ارسال': '#6366f1', 'خارجي': '#14b8a6' };
-                const infoRow = (label, val) => val ? `<div style="font-size:16px;color:#1f2937;margin-bottom:6px;"><span style="color:#64748b;font-weight:700;">${label}:</span> <span style="font-weight:800;">${escapeHtml(toEnglishDigits(val))}</span></div>` : '';
-
-                const ordersHtml = perOrder.map(({ order: o, items: its }) => {
-                    const color = statusColors[o.status] || '#64748b';
+                // (2) توحيد كل أوردر في شكل واحد للطباعة
+                const fmtDate = (d) => {
+                    const dt = d ? new Date(d) : null;
+                    if (!dt || isNaN(dt)) return toEnglishDigits(String(d || ''));
+                    return dt.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: '2-digit' });
+                };
+                const docs = toPrint.map(o => {
+                    const so = o.shopify_order_id ? shopifyById.get(String(o.shopify_order_id)) : null;
+                    if (so) {
+                        return {
+                            name: so.name || o.id, date: fmtDate(so.createdAt),
+                            billTo: so.billTo, shipTo: so.shipTo, phone: toEnglishDigits(so.phone || o.phone || ''),
+                            items: so.items, hasPrices: true,
+                            subtotal: so.subtotal, tax: so.tax, shipping: so.shipping, total: so.total,
+                            paid: so.paid, outstanding: so.outstanding, notes: o.notes || '',
+                        };
+                    }
                     const prod = Number(o.productPrice) || 0;
                     const ship = Number(o.shippingPrice) || 0;
-                    const total = prod + ship;
-                    const itemRows = its.length ? its.map((it, i) => `
-                        <tr style="border-bottom:1px solid #eef2f7;${i % 2 === 1 ? 'background:#fafafa;' : ''}break-inside:avoid;">
-                            <td style="padding:9px 7px;text-align:center;width:66px;">${imgBox(it.image, 54)}</td>
-                            <td style="padding:9px 12px;font-size:17px;font-weight:800;color:#0f172a;line-height:1.5;">${escapeHtml(it.name)}</td>
-                            <td style="padding:9px 12px;font-size:15px;font-weight:700;color:#1f2937;white-space:nowrap;">${escapeHtml(toEnglishDigits(it.variant) || '—')}</td>
-                            <td style="padding:9px 12px;text-align:center;font-size:22px;font-weight:900;color:#000;">${it.qty}</td>
-                        </tr>`).join('') : `<tr><td colspan="4" style="padding:14px;text-align:center;color:#94a3b8;font-size:15px;">${escapeHtml(o.item || 'لا توجد أصناف')}</td></tr>`;
+                    const lines = [o.customer, o.address].map(x => toEnglishDigits(String(x || '').trim())).filter(Boolean);
+                    return {
+                        name: toEnglishDigits(String(o.id)), date: toEnglishDigits(String(o.date || '')),
+                        billTo: lines, shipTo: lines, phone: toEnglishDigits(o.phone || ''),
+                        items: parseOrderItems(o), hasPrices: false,
+                        subtotal: prod, tax: 0, shipping: ship, total: prod + ship,
+                        paid: 0, outstanding: prod + ship, notes: o.notes || '',
+                    };
+                });
 
-                    return `<div style="page-break-before:always;padding:24px;font-family:'Cairo',Arial,sans-serif;direction:rtl;">
-                        <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2.5px solid #0f172a;padding-bottom:12px;margin-bottom:16px;">
-                            <div>
-                                <div style="font-size:28px;font-weight:900;color:#0f172a;">أوردر ${escapeHtml(toEnglishDigits(o.id))}</div>
-                                <div style="font-size:15px;color:#64748b;margin-top:5px;">${escapeHtml(toEnglishDigits(o.date || ''))}${o.page ? ' • ' + escapeHtml(o.page) : ''}</div>
-                            </div>
-                            <span style="background:${color}18;color:${color};border:1.5px solid ${color}66;border-radius:8px;padding:5px 14px;font-size:15px;font-weight:900;white-space:nowrap;">${escapeHtml(o.status || '')}</span>
+                // (3) تجميع الأصناف عبر كل الأوردرات
+                const map = new Map();
+                for (const d of docs) {
+                    for (const it of d.items) {
+                        const key = it.title + '||' + (it.variant || '');
+                        if (!map.has(key)) map.set(key, { title: it.title, variant: it.variant || '', image: it.image || '', qty: 0, orders: [] });
+                        const entry = map.get(key);
+                        entry.qty += it.qty;
+                        if (!entry.image && it.image) entry.image = it.image;
+                        if (!entry.orders.includes(d.name)) entry.orders.push(d.name);
+                    }
+                }
+                const items = Array.from(map.values()).sort((a, b) => b.qty - a.qty || a.title.localeCompare(b.title, 'ar'));
+                if (items.length === 0) { notify('مفيش أصناف في الأوردرات المحددة', 'warning'); return; }
+
+                // (4) بناء الصفحات
+                const PAGE_W = 794, PAGE_H = 1123, PAD_X = 66, PAD_TOP = 56, PAD_BOTTOM = 56;
+                const esc = (s) => escapeHtml(toEnglishDigits(s == null ? '' : String(s)));
+                const le = (n) => 'LE ' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const imgTag = (src, px) => src
+                    ? `<img src="${escapeHtml(src)}" crossorigin="anonymous" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'" style="width:${px}px;height:${px}px;object-fit:cover;display:block;" />`
+                    : '';
+                const cell = 'border:1px solid #c9c9c9;padding:8px 7px;vertical-align:top;';
+                const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: '2-digit' });
+
+                const pickHeader = `<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:26px;">
+                        <div style="font-size:30px;font-weight:700;color:#000;line-height:1.2;">Pick list</div>
+                        <div style="text-align:right;font-size:14px;color:#000;line-height:1.75;">
+                            ${shop && shop.city ? `<div>${esc(shop.city)}</div>` : `<div>${esc(storeName)}</div>`}
+                            <div>${esc(today)}</div>
                         </div>
-                        <div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap;">
-                            <div style="flex:1;min-width:240px;">
-                                ${infoRow('الاسم', o.customer)}
-                                ${infoRow('الموبايل', o.phone)}
-                                ${infoRow('العنوان', o.address)}
-                                ${infoRow('البوليصة', o.trackingNumber)}
-                            </div>
-                            <div style="text-align:left;min-width:180px;">
-                                <div style="font-size:16px;color:#1f2937;margin-bottom:6px;"><span style="color:#64748b;font-weight:700;">سعر المنتجات:</span> <span style="font-weight:800;">${toEnglishDigits(prod)} ج.م</span></div>
-                                <div style="font-size:16px;color:#1f2937;margin-bottom:6px;"><span style="color:#64748b;font-weight:700;">الشحن:</span> <span style="font-weight:800;">${toEnglishDigits(ship)} ج.م</span></div>
-                                <div style="font-size:22px;color:#000;margin-top:8px;font-weight:900;">الإجمالي: ${toEnglishDigits(total)} ج.م</div>
-                            </div>
-                        </div>
-                        <table style="width:100%;border-collapse:collapse;">
-                            <thead style="display:table-header-group;"><tr style="border-bottom:2px solid #0f172a;background:#f1f5f9;">
-                                <th style="padding:9px 7px;font-size:14px;font-weight:800;text-align:center;color:#0f172a;">الصورة</th>
-                                <th style="padding:9px 12px;font-size:14px;font-weight:800;text-align:right;color:#0f172a;">المنتج</th>
-                                <th style="padding:9px 12px;font-size:14px;font-weight:800;text-align:right;color:#0f172a;">المتغير</th>
-                                <th style="padding:9px 12px;font-size:14px;font-weight:800;text-align:center;color:#0f172a;">الكمية</th>
-                            </tr></thead>
-                            <tbody>${itemRows}</tbody>
-                        </table>
-                        ${o.notes ? `<div style="margin-top:14px;padding:10px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:14px;color:#92400e;"><b>ملاحظات:</b> ${escapeHtml(toEnglishDigits(o.notes))}</div>` : ''}
                     </div>`;
-                }).join('');
+                const pickThead = `<tr style="background:#fff;">
+                        <th style="${cell}width:92px;text-align:left;font-size:14px;font-weight:700;">Image</th>
+                        <th style="${cell}text-align:left;font-size:14px;font-weight:700;">Product Title</th>
+                        <th style="${cell}width:96px;text-align:left;font-size:14px;font-weight:700;">Variant</th>
+                        <th style="${cell}width:60px;text-align:right;font-size:14px;font-weight:700;">Qty</th>
+                        <th style="${cell}width:170px;text-align:left;font-size:14px;font-weight:700;">Order</th>
+                    </tr>`;
+                const pickRow = (it, idx) => `<tr style="${idx % 2 === 1 ? 'background:#f7f7f7;' : 'background:#fff;'}">
+                        <td style="${cell}height:76px;">${imgTag(it.image, 62)}</td>
+                        <td style="${cell}font-size:14px;line-height:1.45;color:#000;">${esc(it.title)}</td>
+                        <td style="${cell}font-size:14px;color:#000;">${esc(it.variant || 'Default Title')}</td>
+                        <td style="${cell}font-size:14px;text-align:right;color:#000;">${it.qty}</td>
+                        <td style="${cell}font-size:14px;line-height:1.45;color:#000;">${esc(it.orders.join(', '))}</td>
+                    </tr>`;
+                const tableOpen = `<table style="width:100%;border-collapse:collapse;table-layout:fixed;">`;
+                const pageOpen = `<div class="yd-page" style="width:${PAGE_W}px;min-height:${PAGE_H}px;padding:${PAD_TOP}px ${PAD_X}px ${PAD_BOTTOM}px;box-sizing:border-box;background:#fff;color:#000;direction:ltr;text-align:left;font-family:'Cairo',Arial,sans-serif;">`;
 
-                // نعرض القائمة كطبقة داخل نفس الصفحة (أضمن من نافذة منفصلة على الموبايل/الآيفون)
-                const toolbar = `<div class="no-print" style="position:sticky;top:0;z-index:5;background:#0f172a;display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center;padding:12px;box-shadow:0 2px 10px rgba(0,0,0,.25);">
+                // قياس ارتفاع كل صف فعلياً عشان نقسم الصفحات من غير ما صف يتقطع بين صفحتين
+                if (document.fonts && document.fonts.ready) { try { await document.fonts.ready; } catch (e) {} }
+                const measure = document.createElement('div');
+                measure.style.cssText = `position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;width:${PAGE_W}px;`;
+                measure.innerHTML = `${pageOpen}${pickHeader}${tableOpen}<thead>${pickThead}</thead><tbody>${items.map(pickRow).join('')}</tbody></table></div>`;
+                document.body.appendChild(measure);
+                const headerH = measure.querySelector('.yd-page > div').offsetHeight + 26;
+                const theadH = measure.querySelector('thead').offsetHeight;
+                const rowHs = Array.from(measure.querySelectorAll('tbody tr')).map(tr => tr.offsetHeight);
+                measure.remove();
+
+                const usable = PAGE_H - PAD_TOP - PAD_BOTTOM;
+                const pickPages = [];
+                let cur = [], used = headerH + theadH;
+                items.forEach((it, i) => {
+                    if (cur.length && used + rowHs[i] > usable) { pickPages.push(cur); cur = []; used = theadH; }
+                    cur.push(i); used += rowHs[i];
+                });
+                if (cur.length) pickPages.push(cur);
+
+                const pickPagesHtml = pickPages.map((idxs, p) => `${pageOpen}
+                        ${p === 0 ? pickHeader : ''}
+                        ${tableOpen}<thead>${pickThead}</thead><tbody>${idxs.map(i => pickRow(items[i], i)).join('')}</tbody></table>
+                    </div>`);
+
+                const block = (title, lines) => `<div style="flex:1;font-size:14px;line-height:1.7;color:#000;min-width:0;word-wrap:break-word;">
+                        <div style="font-weight:700;">${title}</div>
+                        ${lines.map(l => `<div>${esc(l)}</div>`).join('')}
+                    </div>`;
+                const sumRow = (label, val, bold) => `<tr>
+                        <td style="${cell}border-right:none;"></td>
+                        <td style="${cell}border-left:none;text-align:right;font-size:14px;${bold ? 'font-weight:700;' : ''}">${label}</td>
+                        <td style="${cell}text-align:right;font-size:14px;white-space:nowrap;${bold ? 'font-weight:700;' : ''}">${val}</td>
+                    </tr>`;
+
+                const invoicePagesHtml = docs.map(d => {
+                    const lineSum = d.hasPrices ? d.items.reduce((s, it) => s + it.unitPrice * it.qty, 0) : 0;
+                    const discount = d.hasPrices ? Math.round((lineSum - d.subtotal) * 100) / 100 : 0;
+                    const rows = d.items.map(it => `<tr>
+                            <td style="${cell}width:44px;font-size:14px;">${it.qty}</td>
+                            <td style="${cell}font-size:14px;line-height:1.5;"><bdi dir="ltr">${esc(it.title)}</bdi>${it.variant ? ' - <bdi>' + esc(it.variant) + '</bdi>' : ''}</td>
+                            <td style="${cell}width:120px;text-align:right;font-size:14px;white-space:nowrap;">${d.hasPrices ? le(it.unitPrice * it.qty) : ''}</td>
+                        </tr>`).join('');
+                    return `${pageOpen}
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:22px;">
+                            <div style="font-size:30px;font-weight:700;line-height:1.2;">Invoice</div>
+                            <div style="text-align:right;font-size:14px;line-height:1.6;">
+                                <div>Order ${esc(d.name)}</div>
+                                <div>${esc(d.date)}</div>
+                            </div>
+                        </div>
+                        <div style="display:flex;gap:18px;padding-bottom:18px;border-bottom:1.5px solid #000;">
+                            ${block('From', fromLines)}
+                            ${block('Bill to', d.billTo)}
+                            ${block('Ship to', d.phone ? [...d.shipTo, d.phone] : d.shipTo)}
+                        </div>
+                        <div style="font-size:16px;font-weight:700;margin:26px 0 12px;">Order Details</div>
+                        ${tableOpen}
+                            <thead><tr>
+                                <th style="${cell}width:44px;text-align:left;font-size:14px;font-weight:700;">Qty</th>
+                                <th style="${cell}text-align:left;font-size:14px;font-weight:700;">Item</th>
+                                <th style="${cell}width:120px;text-align:right;font-size:14px;font-weight:700;">Price</th>
+                            </tr></thead>
+                            <tbody>
+                                ${rows}
+                                ${sumRow('Subtotal', le(discount > 0.009 ? lineSum : d.subtotal))}
+                                ${discount > 0.009 ? sumRow('Discount', '- ' + le(discount)) : ''}
+                                ${sumRow('Tax', le(d.tax))}
+                                ${sumRow('Shipping', le(d.shipping))}
+                                ${sumRow('Total', le(d.total), true)}
+                                ${sumRow('Total Paid', le(d.paid))}
+                                ${sumRow('Outstanding Amount', le(d.outstanding), true)}
+                            </tbody>
+                        </table>
+                        ${d.notes ? `<div style="margin-top:16px;font-size:14px;line-height:1.6;"><b>Notes:</b> <span dir="auto">${esc(d.notes)}</span></div>` : ''}
+                        ${shop && shop.email ? `<div style="margin-top:16px;font-size:14px;">If you have any questions, please send an email to ${esc(shop.email)}</div>` : ''}
+                    </div>`;
+                });
+
+                const allPagesHtml = [...pickPagesHtml, ...invoicePagesHtml].join('');
+
+                // (5) العرض: معاينة مصغّرة على مقاس الشاشة + نسخة كاملة المقاس مخفية تحتها لعمل الـ PDF
+                const toolbar = `<div class="no-print" style="position:sticky;top:0;z-index:5;background:#0f172a;display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center;padding:12px;box-shadow:0 2px 10px rgba(0,0,0,.25);direction:rtl;">
                     <button data-pdf style="background:#e11d48;color:#fff;border:none;border-radius:10px;padding:12px 26px;font-size:16px;font-weight:800;cursor:pointer;font-family:'Cairo',Arial,sans-serif;">📄 حفظ / مشاركة PDF</button>
                     <button data-print style="background:#14b8a6;color:#fff;border:none;border-radius:10px;padding:12px 22px;font-size:15px;font-weight:800;cursor:pointer;font-family:'Cairo',Arial,sans-serif;">🖨️ طباعة</button>
                     <button data-close style="background:#334155;color:#fff;border:none;border-radius:10px;padding:12px 18px;font-size:14px;font-weight:700;cursor:pointer;font-family:'Cairo',Arial,sans-serif;">إغلاق</button>
                 </div>`;
 
-                // إزالة أي نسخة سابقة
-                const oldRoot = document.getElementById('pickPrintRoot');
-                if (oldRoot) oldRoot.remove();
-                const oldStyle = document.getElementById('pickPrintStyle');
-                if (oldStyle) oldStyle.remove();
+                ['pickPrintRoot', 'pickPrintStyle', 'pickRenderHost'].forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
 
                 const styleEl = document.createElement('style');
                 styleEl.id = 'pickPrintStyle';
                 styleEl.textContent = `
-                    #pickPrintRoot{position:fixed;inset:0;z-index:99999;background:#fff;overflow:auto;direction:rtl;font-family:'Cairo',Arial,sans-serif;-webkit-overflow-scrolling:touch;}
-                    #pickPrintRoot thead th{background:#f8fafc;}
+                    #pickPrintRoot{position:fixed;inset:0;z-index:99999;background:#e5e7eb;overflow:auto;-webkit-overflow-scrolling:touch;}
+                    #pickPrintRoot .yd-pages{padding:12px 0 40px;}
+                    #pickPrintRoot .yd-page{margin:0 auto 12px;box-shadow:0 1px 6px rgba(0,0,0,.18);}
+                    #pickRenderHost{position:fixed;left:0;top:0;width:${PAGE_W}px;z-index:-1;pointer-events:none;}
                     @media print{
-                        @page{size:A4 portrait;margin:12mm;}
+                        @page{size:A4 portrait;margin:0;}
                         html,body{background:#fff!important;}
                         body>*:not(#pickPrintRoot){display:none!important;}
-                        #pickPrintRoot{position:static!important;overflow:visible!important;z-index:auto!important;}
+                        #pickPrintRoot{position:static!important;overflow:visible!important;background:#fff!important;}
                         #pickPrintRoot .no-print{display:none!important;}
-                        tr{break-inside:avoid;}
+                        #pickPrintRoot .yd-pages{zoom:1!important;padding:0!important;}
+                        #pickPrintRoot .yd-page{margin:0!important;box-shadow:none!important;width:210mm!important;min-height:297mm!important;page-break-after:always;break-after:page;}
+                        #pickPrintRoot .yd-page:last-child{page-break-after:auto;break-after:auto;}
                     }`;
                 document.head.appendChild(styleEl);
 
+                const host = document.createElement('div');
+                host.id = 'pickRenderHost';
+                host.innerHTML = allPagesHtml;
+                document.body.appendChild(host);
+
                 const root = document.createElement('div');
                 root.id = 'pickPrintRoot';
-                root.innerHTML = `${toolbar}${html}${ordersHtml}`;
+                root.innerHTML = `${toolbar}<div class="yd-pages">${allPagesHtml}</div>`;
                 document.body.appendChild(root);
+                const pagesWrap = root.querySelector('.yd-pages');
+                const fitPreview = () => { const vw = Math.min(window.innerWidth, document.documentElement.clientWidth || window.innerWidth, (window.visualViewport && window.visualViewport.width) || window.innerWidth); pagesWrap.style.zoom = String(Math.min(1, (vw - 16) / PAGE_W)); };
+                fitPreview();
+                window.addEventListener('resize', fitPreview);
 
-                const closeOverlay = () => { root.remove(); styleEl.remove(); document.body.style.overflow = ''; };
+                const closeOverlay = () => {
+                    window.removeEventListener('resize', fitPreview);
+                    root.remove(); host.remove(); styleEl.remove(); document.body.style.overflow = '';
+                };
                 document.body.style.overflow = 'hidden';
                 const printBtn = root.querySelector('[data-print]');
                 const closeBtn = root.querySelector('[data-close]');
@@ -1485,79 +1555,74 @@
                 if (printBtn) printBtn.addEventListener('click', () => window.print());
                 if (closeBtn) closeBtn.addEventListener('click', closeOverlay);
 
-                // تحميل مكتبة عند الحاجة فقط (عشان بداية التطبيق تفضل سريعة)
                 const loadScript = (src) => new Promise((resolve, reject) => {
                     if (Array.from(document.scripts).some(s => s.src === src)) return resolve();
                     const s = document.createElement('script');
                     s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('فشل تحميل ' + src));
                     document.head.appendChild(s);
                 });
+                const waitImages = (el) => Promise.all(Array.from(el.querySelectorAll('img')).map(img =>
+                    img.complete ? Promise.resolve() : new Promise(r => { img.onload = r; img.onerror = r; setTimeout(r, 10000); })));
 
-                // بناء ملف PDF من أقسام الصفحة (القائمة المجمّعة + كل أوردر على صفحة) — بحجم صغير للواتساب
+                // كل صفحة A4 بتتصوّر لوحدها بمقاسها الكامل (مش بعرض شاشة الموبايل) وتتحط في صفحة PDF
                 const buildPdfFile = async () => {
                     await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
                     await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+                    await waitImages(host);
                     const jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
                     const pdf = new jsPDFCtor({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
                     const pageW = pdf.internal.pageSize.getWidth();
                     const pageH = pdf.internal.pageSize.getHeight();
-                    const margin = 8;
-                    const usableW = pageW - margin * 2;
-                    const usableH = pageH - margin * 2;
-
-                    const blocks = Array.from(root.children).filter(el => !el.classList || !el.classList.contains('no-print'));
-                    let firstBlock = true;
-                    for (const block of blocks) {
-                        // دقة أقل + ضغط JPEG أعلى = ملف أصغر بكثير (الخط كبير فيفضل واضح)
-                        const canvas = await window.html2canvas(block, { scale: 1.35, useCORS: true, allowTaint: false, imageTimeout: 15000, backgroundColor: '#ffffff', logging: false });
-                        const imgData = canvas.toDataURL('image/jpeg', 0.55);
-                        const imgH = usableW * canvas.height / canvas.width;
-                        if (!firstBlock) pdf.addPage();
-                        firstBlock = false;
-                        let heightLeft = imgH; let position = 0;
-                        pdf.addImage(imgData, 'JPEG', margin, margin, usableW, imgH, undefined, 'FAST');
-                        heightLeft -= usableH;
-                        while (heightLeft > 0.5) {
-                            position -= usableH;
+                    const pageEls = Array.from(host.querySelectorAll('.yd-page'));
+                    for (let i = 0; i < pageEls.length; i++) {
+                        const el = pageEls[i];
+                        pdfBtn.textContent = `⏳ صفحة ${i + 1} من ${pageEls.length}...`;
+                        const canvas = await window.html2canvas(el, {
+                            scale: 1.6, useCORS: true, allowTaint: false, imageTimeout: 15000, backgroundColor: '#ffffff', logging: false,
+                            width: PAGE_W, height: el.offsetHeight, windowWidth: PAGE_W, scrollX: 0, scrollY: 0,
+                        });
+                        const imgData = canvas.toDataURL('image/jpeg', 0.72);
+                        const imgH = pageW * canvas.height / canvas.width;
+                        if (i > 0) pdf.addPage();
+                        // فاتورة طويلة جداً (أصناف كتير) بتكمل على صفحة تانية
+                        let offset = 0;
+                        pdf.addImage(imgData, 'JPEG', 0, 0, pageW, imgH, undefined, 'FAST');
+                        while (imgH - offset - pageH > 1) {
+                            offset += pageH;
                             pdf.addPage();
-                            pdf.addImage(imgData, 'JPEG', margin, margin + position, usableW, imgH, undefined, 'FAST');
-                            heightLeft -= usableH;
+                            pdf.addImage(imgData, 'JPEG', 0, -offset, pageW, imgH, undefined, 'FAST');
                         }
                     }
-                    const fileName = `قائمة-تجهيز-${new Date().toISOString().slice(0, 10)}.pdf`;
+                    const fileName = `pick-list-${new Date().toISOString().slice(0, 10)}.pdf`;
                     const blob = pdf.output('blob');
                     return { blob, file: new File([blob], fileName, { type: 'application/pdf' }), fileName };
                 };
 
                 // نظام خطوتين: (1) تجهيز الملف  ثم  (2) مشاركة/حفظ بضغطة منفصلة (مهم للآيفون)
-                let pdfReady = null; // { blob, file, fileName }
+                let pdfReady = null;
                 const sharePdf = async () => {
                     if (!pdfReady) return;
-                    // المشاركة لازم تحصل داخل ضغطة المستخدم — بدون await قبلها
                     if (navigator.canShare && navigator.canShare({ files: [pdfReady.file] })) {
                         try {
                             await navigator.share({ files: [pdfReady.file], title: 'قائمة تجهيز' });
                             return;
                         } catch (e) {
-                            if (e && e.name === 'AbortError') return; // المستخدم قفل القائمة
-                            // غير كده: نكمل على الرابط المباشر تحت
+                            if (e && e.name === 'AbortError') return;
                         }
                     }
-                    // بديل: افتح الملف في عارض (بدون ما يخرجك من التطبيق) عبر رابط جاهز
                     const link = root.querySelector('[data-pdflink]');
                     if (link) link.click();
                 };
 
                 const onPdfBtn = async () => {
                     if (!pdfBtn) return;
-                    if (pdfReady) { sharePdf(); return; } // الملف جاهز → شارك مباشرة (ضغطة المستخدم)
+                    if (pdfReady) { sharePdf(); return; }
                     pdfBtn.disabled = true;
                     const original = pdfBtn.textContent;
                     pdfBtn.textContent = '⏳ جاري تجهيز الملف...';
                     try {
                         pdfReady = await buildPdfFile();
                         const url = URL.createObjectURL(pdfReady.blob);
-                        // رابط مباشر ظاهر كبديل مضمون (فتح/حفظ في عارض الآيفون)
                         const a = document.createElement('a');
                         a.setAttribute('data-pdflink', '');
                         a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.download = pdfReady.fileName;
@@ -1990,6 +2055,7 @@
                         }
                         logActivity(changes.length > 0 ? `تعديل: ${changes.join(' | ')}` : 'تحديث بيانات بدون تغييرات فعلية', finalOrderId);
                         syncToGoogleSheet('upsert', orderPayload);
+                        if (originalOrderData && originalOrderData.status !== orderPayload.status) syncShopifyStatus([mergedOrder], orderPayload.status);
                         closeModal();
                     } else {
                         await savePayload(orderPayload, false, null, finalOrderId);
@@ -2001,6 +2067,38 @@
                     }
                     fetchOrdersData();
                 } catch (error) { notify(`فشل الحفظ: ${error.message}`); } finally { setIsSubmitting(false); }
+            };
+
+            // مزامنة الحالة مع شوبيفاي: أي أوردر جاي من شوبيفاي يتحول "الشحن" يتعمله Fulfill هناك، و"الغاء" يتلغي.
+            // بتشتغل من كل الطرق (تغيير سريع، جماعي، تعديل سريع، تعديل الأوردر) وبتبلّغ لو حصل فشل.
+            const syncShopifyStatus = async (ordersList, newStatus) => {
+                const action = { 'الشحن': 'fulfill', 'الغاء': 'cancel' }[newStatus];
+                if (!action) return;
+                const targets = (ordersList || []).filter(o => o && o.shopify_order_id);
+                if (targets.length === 0) return;
+                const { data: { session: sess } } = await supabase.auth.getSession();
+                const authToken = sess?.access_token || '';
+                const failed = [];
+                for (let i = 0; i < targets.length; i += 3) {
+                    await Promise.all(targets.slice(i, i + 3).map(async (o) => {
+                        try {
+                            const r = await fetch('/api/shopify-action', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'x-crm-auth': authToken },
+                                body: JSON.stringify({ action, shopifyOrderId: o.shopify_order_id, shopifyStore: o.shopify_store, trackingNumber: o.trackingNumber || '' })
+                            });
+                            const d = await r.json().catch(() => ({}));
+                            if (!r.ok || !d.ok) failed.push(`${o.id}: ${d.error || r.status}`);
+                        } catch (e) { failed.push(`${o.id}: ${e.message}`); }
+                    }));
+                }
+                const label = action === 'fulfill' ? 'شحن' : 'إلغاء';
+                if (failed.length) {
+                    notify(`⚠️ اتحفظ في السيستم، بس فشل ${label} ${failed.length} أوردر على شوبيفاي: ${failed.slice(0, 3).join(' | ')}`);
+                    logActivity(`فشل مزامنة شوبيفاي (${label}): ${failed.join(' | ')}`.slice(0, 500), targets.length > 1 ? 'متعدد' : targets[0].id);
+                } else {
+                    notify(`✅ اتعمل ${label} على شوبيفاي لـ ${targets.length} أوردر`, 'success');
+                }
             };
 
             const handleStatusChange = async (id, newStatus) => {
@@ -2017,20 +2115,7 @@
                     if(error) throw error;
                     logActivity(`تغيير الحالة السريع إلى "${newStatus}"`, id);
                     syncToGoogleSheet('upsert', {...orderToUpdate, status: newStatus});
-                    // Shopify sync: لو الأوردر جاي من Shopify نحدث Shopify كمان
-                    if (orderToUpdate.shopify_order_id && orderToUpdate.shopify_store) {
-                        const shopifyActionMap = { 'الشحن': 'fulfill', 'الغاء': 'cancel', 'تم': 'complete' };
-                        const shopifyAction = shopifyActionMap[newStatus];
-                        if (shopifyAction) {
-                            const { data: { session: sess } } = await supabase.auth.getSession();
-                            const authToken = sess?.access_token || '';
-                            fetch('/api/shopify-action', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json', 'x-crm-auth': authToken },
-                                body: JSON.stringify({ action: shopifyAction, shopifyOrderId: orderToUpdate.shopify_order_id, shopifyStore: orderToUpdate.shopify_store })
-                            }).catch(() => {}); // fire-and-forget
-                        }
-                    }
+                    syncShopifyStatus([{ ...orderToUpdate, status: newStatus }], newStatus);
                 } catch (error) { notify("خطأ في التحديث: " + error.message); setOrders(previousOrders); }
             };
 
@@ -2053,6 +2138,7 @@
                      setOrders(prev => prev.map(o => o.id === viewOrder.id ? updatedOrder : o));
                      syncToGoogleSheet('upsert', updatedOrder);
                      notify("تم الحفظ بنجاح!", 'success');
+                     if (quickStatus !== viewOrder.status) syncShopifyStatus([updatedOrder], quickStatus);
                  } catch (error) { notify("فشل الحفظ: " + error.message); } finally { setIsQuickUpdating(false); }
             };
 
@@ -2101,6 +2187,7 @@
                     logActivity('تغيير حالة ' + idsToUpdate.length + ' طلب إلى ' + bulkStatusValue, 'متعدد');
                     notify('تم تغيير حالة ' + idsToUpdate.length + ' طلب إلى ' + bulkStatusValue, 'success');
                     setBulkStatusValue('');
+                    syncShopifyStatus(previousOrders.filter(o => idsToUpdate.includes(o.id)).map(o => ({ ...o, status: bulkStatusValue })), bulkStatusValue);
                 } catch (err) { notify('فشل تغيير الحالة: ' + err.message); setOrders(previousOrders); setSelectedOrders(idsToUpdate); }
                 finally { setIsBulkChangingStatus(false); }
             };
@@ -2470,7 +2557,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.58</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.59</span>
                             </div>
                         </nav>
                     </aside>
