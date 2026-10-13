@@ -1,3 +1,4 @@
+const { requireApprovedUser } = require('../lib/auth');
 // بيانات الطباعة (قائمة التجهيز + الفواتير) من شوبيفاي مباشرة:
 // أسعار كل صنف، المتغير، صورة المنتج، العنوان الكامل وبيانات المتجر — بدل تخمينها من نص الأوردر.
 const SHOPIFY_GRAPHQL_VERSION = '2026-01';
@@ -9,6 +10,7 @@ const QUERY = `query PrintOrders($ids: [ID!]!) {
       legacyResourceId
       name
       createdAt
+      cancelledAt
       shippingAddress { name address1 address2 city province zip country phone }
       billingAddress { name address1 address2 city province zip country phone }
       currentSubtotalPriceSet { shopMoney { amount } }
@@ -54,12 +56,8 @@ const addressLines = (a) => {
 async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  const authToken = req.headers['x-crm-auth'] || '';
-  if (!authToken) return res.status(401).json({ error: 'Unauthorized' });
-  const authRes = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
-    headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${authToken}` },
-  });
-  if (!authRes.ok) return res.status(401).json({ error: 'Invalid session' });
+  const auth = await requireApprovedUser(req);
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
 
   let body;
   try { body = JSON.parse((await readRawBody(req)).toString('utf8')); }
@@ -105,6 +103,7 @@ async function handler(req, res) {
           shopifyOrderId: String(o.legacyResourceId),
           name: o.name,
           createdAt: o.createdAt,
+          cancelled: !!o.cancelledAt,
           shipTo: addressLines(o.shippingAddress || o.billingAddress),
           billTo: addressLines(o.billingAddress || o.shippingAddress),
           phone: (ship && ship.phone) || '',

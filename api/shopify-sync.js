@@ -1,251 +1,170 @@
-const SHOPIFY_API_VERSION = '2024-01';
+const { requireApprovedUser } = require('../lib/auth');
+const {
+  STORE_KEY, SHOPIFY_API_VERSION, buildOrderRow, shopifyOwnedFields, statusUpdates, orderDate,
+  supabaseRequest, orderFilter,
+} = require('../lib/shopify-order');
 
-function normalizePhone(raw) {
-  if (!raw) return '';
-  let p = raw.replace(/[\s\-\(\)\.]/g, '');
-  if (p.startsWith('+20')) p = '0' + p.slice(3);
-  else if (p.startsWith('0020')) p = '0' + p.slice(4);
-  else if (p.startsWith('+2')) p = '0' + p.slice(2);
-  return p;
-}
-
-function findNoteAttr(noteAttrs, keys) {
-  if (!noteAttrs || !noteAttrs.length) return '';
-  for (const key of keys) {
-    const found = noteAttrs.find(a => a.name && a.name.toLowerCase().includes(key.toLowerCase()));
-    if (found && found.value) return found.value.trim();
-  }
-  return '';
-}
-
-// يجمّع العنوان الكامل من كل الحقول المتاحة (تفاصيل + مدينة + منطقة/محافظة + رمز)
-// مع تفضيل عنوان الشحن ثم الفوترة ثم عنوان العميل الافتراضي
-function buildFullAddress(s, b, d, noteAttrs) {
-  const pieces = (a) => {
-    if (!a) return [];
-    return [a.address1, a.address2, a.city, a.province, a.zip]
-      .map(x => (x == null ? '' : String(x)).trim())
-      .filter(Boolean);
-  };
-  let parts = pieces(s);
-  if (parts.length === 0) parts = pieces(b);
-  if (parts.length === 0) parts = pieces(d);
-
-  const seen = new Set();
-  const uniq = [];
-  for (const p of parts) {
-    const k = p.toLowerCase();
-    if (!seen.has(k)) { seen.add(k); uniq.push(p); }
-  }
-  let full = uniq.join(' - ');
-  if (!full) full = findNoteAttr(noteAttrs, ['address', 'عنوان', 'العنوان', 'المنطقة']) || '';
-  return full;
-}
-
-function extractCustomer(order) {
-  const b = order.billing_address || {};
-  const s = order.shipping_address || {};
-  const c = order.customer || {};
-  const d = c.default_address || {};
-  const noteAttrs = order.note_attributes || [];
-
-  const customer =
-    s.name ||
-    b.name ||
-    (s.first_name ? `${s.first_name} ${s.last_name || ''}`.trim() : '') ||
-    (b.first_name ? `${b.first_name} ${b.last_name || ''}`.trim() : '') ||
-    d.name ||
-    (d.first_name ? `${d.first_name} ${d.last_name || ''}`.trim() : '') ||
-    (c.first_name ? `${c.first_name} ${c.last_name || ''}`.trim() : '') ||
-    findNoteAttr(noteAttrs, ['name', 'اسم', 'الاسم', 'customer']) ||
-    'عميل Shopify';
-
-  const phone = normalizePhone(
-    s.phone || b.phone || order.phone || c.phone || d.phone ||
-    findNoteAttr(noteAttrs, ['phone', 'mobile', 'موبايل', 'الموبايل', 'هاتف', 'رقم']) ||
-    ''
-  );
-
-  // العنوان الكامل: نجمّع كل حقول العنوان بدل حقل واحد
-  const address = buildFullAddress(s, b, d, noteAttrs);
-
-  return { customer, phone, address };
-}
-
-// يحسب الإجمالي (المنتجات) بعد خصم الخصومات (كود خصم / تعديل سعر الأوردر)
-function computeProductPrice(order) {
-  const lineItems = order.line_items || [];
-  const gross = lineItems.reduce((sum, it) => sum + parseFloat(it.price || 0) * (it.quantity || 1), 0);
-
-  // subtotal_price من شوبيفاي = إجمالي المنتجات بعد كل الخصومات وقبل الشحن/الضريبة
-  const subtotalRaw = order.current_subtotal_price != null ? order.current_subtotal_price : order.subtotal_price;
-  if (subtotalRaw != null && subtotalRaw !== '') {
-    const subtotal = parseFloat(subtotalRaw);
-    if (!isNaN(subtotal) && subtotal >= 0) return subtotal;
-  }
-
-  // احتياطي: اطرح الخصومات يدوياً
-  const lineDiscounts = lineItems.reduce((sum, it) =>
-    sum + (it.discount_allocations || []).reduce((a, d) => a + parseFloat(d.amount || 0), 0), 0);
-  const orderDiscounts = parseFloat(order.current_total_discounts || order.total_discounts || 0);
-  const discount = lineDiscounts > 0 ? lineDiscounts : orderDiscounts;
-  return Math.max(0, gross - discount);
-}
-
-function buildOrderData(order) {
-  const lineItems = order.line_items || [];
-  const ship = (order.shipping_lines || [])[0] || {};
-  const { customer, phone, address } = extractCustomer(order);
-
-  const itemText = lineItems.map(it => {
-    const name = it.variant_title ? `${it.title} - ${it.variant_title}` : it.title;
-    return it.quantity > 1 ? `${name} ×${it.quantity}` : name;
-  }).join('\n');
-
-  const totalQty = lineItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
-  const totalPrice = computeProductPrice(order);
-  const shippingPrice = parseFloat(ship.price || 0);
-
-  let status = 'جاري التحضير';
-  if (order.cancelled_at) status = 'الغاء';
-  else if (order.fulfillment_status === 'fulfilled') status = 'الشحن';
-  else if (order.financial_status === 'paid') status = 'تم';
-
-  return {
-    id: order.name || `#${order.order_number}`,
-    customer, phone, address,
-    item: itemText,
-    quantity: totalQty,
-    productPrice: totalPrice,
-    shippingPrice,
-    notes: order.note || '',
-    status,
-    page: 'يمن دور ويب',
-    shopify_order_id: order.id,
-    shopify_store: 'yemen_door',
-    source: 'shopify',
-    date: new Date(order.created_at).toLocaleDateString('ar-EG'),
-  };
-}
-
-async function supabaseRequest(method, path, body) {
-  const res = await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-      Prefer: method === 'GET' ? 'return=representation' : 'return=minimal',
-    },
-    body: body ? JSON.stringify(body) : undefined,
+function readJsonBody(req) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); }
+      catch { resolve({}); }
+    });
+    req.on('error', () => resolve({}));
   });
-  if (!res.ok) throw new Error(`Supabase ${method} failed: ${res.status} — ${await res.text()}`);
-  if (method === 'GET') return res.json();
-  return null;
 }
 
-async function fetchShopifyOrders(storeUrl, token, params) {
-  const url = `https://${storeUrl}/admin/api/${SHOPIFY_API_VERSION}/orders.json?${params}`;
+async function shopifyGet(url, token) {
   const r = await fetch(url, { headers: { 'X-Shopify-Access-Token': token } });
   if (!r.ok) throw new Error(`Shopify API error: ${r.status}`);
-  return r.json();
+  const link = r.headers.get('link') || '';
+  const next = link.match(/<([^>]+)>;\s*rel="next"/);
+  return { data: await r.json(), next: next ? next[1] : null };
 }
 
-async function processOrder(order, mode) {
-  const existing = await supabaseRequest('GET',
-    `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door&select=id,status`
-  );
-  const data = buildOrderData(order);
+// جلب أوردرات مع دعم الصفحات (لحد maxPages × 250)
+async function fetchOrders(storeUrl, token, params, maxPages) {
+  const all = [];
+  let url = `https://${storeUrl}/admin/api/${SHOPIFY_API_VERSION}/orders.json?${params}`;
+  for (let page = 0; url && page < maxPages; page++) {
+    const { data, next } = await shopifyGet(url, token);
+    all.push(...(data.orders || []));
+    url = next;
+  }
+  return all;
+}
 
-  if (!existing || existing.length === 0) {
-    // غير موجود → أضفه
-    await supabaseRequest('POST', 'orders', data);
-    return 'inserted';
+// تنفيذ مهام بالتوازي بحد أقصى (أسرع بكتير من واحدة واحدة ومن غير ما نضغط على Supabase)
+async function runPool(items, limit, fn) {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) { const idx = i++; await fn(items[idx]); }
+  });
+  await Promise.all(workers);
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const ROW_COLUMNS = 'id,status,date,shopify_order_id,item,quantity,productPrice,shippingPrice,customer,phone,address';
+
+// الفرق بين بيانات شوبيفاي الحالية والصف في السيستم
+function diffPatch(order, row) {
+  const patch = {};
+  for (const [k, v] of Object.entries(shopifyOwnedFields(order))) {
+    const cur = row[k];
+    const same = typeof v === 'number' ? Number(cur) === v : String(cur == null ? '' : cur) === String(v);
+    if (!same) patch[k] = v;
+  }
+  const rule = statusUpdates(order);
+  if (rule && row.status !== rule.status) {
+    const allowed = rule.in ? rule.in.includes(row.status) : !rule.notIn.includes(row.status);
+    if (allowed) patch.status = rule.status;
+  }
+  // إصلاح التواريخ القديمة اللي اتسجلت بصيغة عربي (بتبوّظ الفلترة بالتاريخ)
+  if (!ISO_DATE.test(String(row.date || ''))) patch.date = orderDate(order);
+  return patch;
+}
+
+async function processOrders(orders, mode) {
+  const counts = { inserted: 0, updated: 0, merged: 0, skipped: 0 };
+  if (!orders.length) return counts;
+
+  // كل الأوردرات الموجودة في السيستم للمجموعة دي بطلب واحد
+  const existingByShopify = new Map();
+  const ids = orders.map(o => o.id);
+  for (let i = 0; i < ids.length; i += 150) {
+    const chunk = ids.slice(i, i + 150).join(',');
+    const rows = await supabaseRequest('GET',
+      `orders?shopify_store=eq.${STORE_KEY}&shopify_order_id=in.(${chunk})&select=${ROW_COLUMNS}`);
+    for (const r of rows || []) {
+      const k = String(r.shopify_order_id);
+      if (!existingByShopify.has(k)) existingByShopify.set(k, []);
+      existingByShopify.get(k).push(r);
+    }
   }
 
-  if (mode === 'missing') return 'skipped'; // وضع الناقصة: لا تحدث الموجود
-
-  if (existing.length === 1) {
-    // موجود: حدّث البيانات مع الحفاظ على الحالة الحالية
-    const { status: _, ...updateData } = data;
-    await supabaseRequest('PATCH',
-      `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`,
-      updateData
-    );
-    return 'updated';
+  const toInsert = [];
+  const toUpdate = [];
+  const toMerge = [];
+  for (const order of orders) {
+    const existing = existingByShopify.get(String(order.id)) || [];
+    if (existing.length === 0) toInsert.push(buildOrderRow(order));
+    else if (mode === 'missing') counts.skipped++;
+    else if (existing.length === 1) toUpdate.push({ order, row: existing[0] });
+    else toMerge.push({ order, rows: existing });
   }
 
-  // أكثر من أوردر مرتبط (#1000-1, #1000-2): دمجهم في أوردر واحد
-  const currentStatus = existing[0]?.status || data.status;
-  await supabaseRequest('DELETE', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`);
-  await supabaseRequest('POST', 'orders', { ...data, status: currentStatus });
-  return 'merged';
+  if (toInsert.length) {
+    for (let i = 0; i < toInsert.length; i += 100) {
+      await supabaseRequest('POST', 'orders?on_conflict=id', toInsert.slice(i, i + 100),
+        'resolution=ignore-duplicates,return=minimal');
+    }
+    counts.inserted = toInsert.length;
+  }
+
+  // بنحدّث بس الأوردرات اللي اتغيرت فعلاً — عشان المزامنة التلقائية المتكررة تفضل خفيفة
+  await runPool(toUpdate, 8, async ({ order, row }) => {
+    const patch = diffPatch(order, row);
+    if (Object.keys(patch).length === 0) { counts.skipped++; return; }
+    await supabaseRequest('PATCH', orderFilter(order.id), patch);
+    counts.updated++;
+  });
+
+  // أكتر من صف لنفس أوردر شوبيفاي (#1000-1, #1000-2): ندمجهم في صف واحد ونحافظ على الحالة
+  for (const { order, rows } of toMerge) {
+    const row = buildOrderRow(order);
+    const status = (rows[0] && rows[0].status) || row.status;
+    await supabaseRequest('DELETE', orderFilter(order.id));
+    await supabaseRequest('POST', 'orders', { ...row, status });
+    counts.merged++;
+  }
+
+  return counts;
 }
 
 async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  const authToken = req.headers['x-crm-auth'] || '';
-  if (!authToken) return res.status(401).json({ error: 'Unauthorized' });
-  const authRes = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
-    headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${authToken}` },
-  });
-  if (!authRes.ok) return res.status(401).json({ error: 'Invalid session' });
+  const auth = await requireApprovedUser(req);
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
 
   const storeUrl = process.env.SHOPIFY_STORE_URL;
   const token = process.env.SHOPIFY_ACCESS_TOKEN;
   if (!storeUrl || !token) return res.status(500).json({ error: 'Store credentials not configured' });
 
-  let body = {};
-  try {
-    const chunks = [];
-    await new Promise((resolve, reject) => {
-      req.on('data', c => chunks.push(c));
-      req.on('end', resolve);
-      req.on('error', reject);
-    });
-    body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-  } catch {}
-
-  const mode = body.mode || 'update'; // 'update' | 'missing' | 'specific' | 'debug'
-  const counts = { inserted: 0, updated: 0, merged: 0, skipped: 0 };
+  const body = await readJsonBody(req);
+  // 'update' | 'missing' | 'specific' | 'recent' | 'debug'
+  const mode = body.mode || 'update';
 
   try {
     let orders = [];
 
-    if (mode === 'debug') {
-      // وضع التشخيص: يرجع البيانات الخام
+    if (mode === 'debug' || mode === 'specific') {
       const orderName = String(body.orderName || '').replace('#', '').trim();
-      let o;
-      if (orderName) {
-        const { orders: found } = await fetchShopifyOrders(storeUrl, token, `status=any&name=${encodeURIComponent('#' + orderName)}&limit=5`);
-        o = (found || [])[0];
-      } else {
-        const { orders: found } = await fetchShopifyOrders(storeUrl, token, `status=any&limit=1&order=created_at+desc`);
-        o = (found || [])[0];
+      if (mode === 'specific' && !orderName) return res.status(400).json({ error: 'orderName مطلوب' });
+      const params = orderName
+        ? `status=any&name=${encodeURIComponent('#' + orderName)}&limit=5`
+        : 'status=any&limit=1&order=created_at+desc';
+      orders = await fetchOrders(storeUrl, token, params, 1);
+      if (mode === 'debug') {
+        const o = orders[0];
+        if (!o) return res.status(200).json({ ok: false, error: 'لا توجد أوردرات' });
+        const { line_items, ...orderWithoutItems } = o;
+        return res.status(200).json({ ok: true, debug: orderWithoutItems, line_items_count: (line_items || []).length });
       }
-      if (!o) return res.status(200).json({ ok: false, error: 'لا توجد أوردرات' });
-      // رجّع الأوردر كامل بدون line_items عشان ما يكونش كبير
-      const { line_items, ...orderWithoutItems } = o;
-      return res.status(200).json({ ok: true, debug: orderWithoutItems, line_items_count: (line_items || []).length });
-    }
-
-    if (mode === 'specific') {
-      const orderName = String(body.orderName || '').replace('#', '').trim();
-      if (!orderName) return res.status(400).json({ error: 'orderName مطلوب' });
-      const { orders: found } = await fetchShopifyOrders(storeUrl, token, `status=any&name=${encodeURIComponent('#' + orderName)}&limit=5`);
-      orders = found || [];
+    } else if (mode === 'recent') {
+      // المزامنة التلقائية: أي أوردر اتعدّل على شوبيفاي في آخر X ساعة (إلغاء، حذف منتج، تعديل سعر/عنوان)
+      const hours = Math.min(Math.max(Number(body.hours) || 72, 1), 24 * 30);
+      const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+      orders = await fetchOrders(storeUrl, token,
+        `status=any&limit=250&updated_at_min=${encodeURIComponent(since)}&order=updated_at+desc`, 4);
     } else {
       const limit = Math.min(Number(body.limit) || 250, 250);
-      const { orders: found } = await fetchShopifyOrders(storeUrl, token, `status=any&limit=${limit}&order=created_at+desc`);
-      orders = found || [];
+      orders = await fetchOrders(storeUrl, token, `status=any&limit=${limit}&order=created_at+desc`, 1);
     }
 
-    for (const order of orders) {
-      const result = await processOrder(order, mode);
-      counts[result]++;
-    }
-
+    const counts = await processOrders(orders, mode);
     return res.status(200).json({ ok: true, total: orders.length, ...counts });
   } catch (err) {
     console.error(`[sync] Error: ${err.message}`);

@@ -1,4 +1,8 @@
 const crypto = require('crypto');
+const {
+  buildOrderRow, applyShopifyUpdate, fetchShopifyOrder,
+  supabaseRequest, orderFilter, statusFilter, isCancelled,
+} = require('../lib/shopify-order');
 
 function readRawBody(req) {
   return new Promise((resolve, reject) => {
@@ -18,125 +22,13 @@ function verifyHmac(rawBody, receivedHmac, secret) {
   } catch { return false; }
 }
 
-function normalizePhone(raw) {
-  if (!raw) return '';
-  let p = raw.replace(/[\s\-\(\)\.]/g, '');
-  if (p.startsWith('+20')) p = '0' + p.slice(3);
-  else if (p.startsWith('0020')) p = '0' + p.slice(4);
-  else if (p.startsWith('+2')) p = '0' + p.slice(2);
-  return p;
-}
-
-function findNoteAttr(noteAttrs, keys) {
-  if (!noteAttrs || !noteAttrs.length) return '';
-  for (const key of keys) {
-    const found = noteAttrs.find(a => a.name && a.name.toLowerCase().includes(key.toLowerCase()));
-    if (found && found.value) return found.value.trim();
-  }
-  return '';
-}
-
-// يحسب الإجمالي (المنتجات) بعد خصم الخصومات (كود خصم / تعديل سعر الأوردر)
-function computeProductPrice(order) {
-  const lineItems = order.line_items || [];
-  const gross = lineItems.reduce((sum, it) => sum + parseFloat(it.price || 0) * (it.quantity || 1), 0);
-
-  // subtotal_price من شوبيفاي = إجمالي المنتجات بعد كل الخصومات وقبل الشحن/الضريبة
-  const subtotalRaw = order.current_subtotal_price != null ? order.current_subtotal_price : order.subtotal_price;
-  if (subtotalRaw != null && subtotalRaw !== '') {
-    const subtotal = parseFloat(subtotalRaw);
-    if (!isNaN(subtotal) && subtotal >= 0) return subtotal;
-  }
-
-  // احتياطي: اطرح الخصومات يدوياً
-  const lineDiscounts = lineItems.reduce((sum, it) =>
-    sum + (it.discount_allocations || []).reduce((a, d) => a + parseFloat(d.amount || 0), 0), 0);
-  const orderDiscounts = parseFloat(order.current_total_discounts || order.total_discounts || 0);
-  const discount = lineDiscounts > 0 ? lineDiscounts : orderDiscounts;
-  return Math.max(0, gross - discount);
-}
-
-function buildItemSummary(order) {
-  const lineItems = order.line_items || [];
-  const itemText = lineItems.map(it => {
-    const name = it.variant_title ? `${it.title} - ${it.variant_title}` : it.title;
-    return it.quantity > 1 ? `${name} ×${it.quantity}` : name;
-  }).join('\n');
-  const totalQty = lineItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
-  return { itemText, totalQty };
-}
-
-// يجمّع العنوان الكامل من كل الحقول المتاحة (تفاصيل + مدينة + منطقة/محافظة + رمز)
-// مع تفضيل عنوان الشحن ثم الفوترة ثم عنوان العميل الافتراضي
-function buildFullAddress(s, b, d, noteAttrs) {
-  const pieces = (a) => {
-    if (!a) return [];
-    return [a.address1, a.address2, a.city, a.province, a.zip]
-      .map(x => (x == null ? '' : String(x)).trim())
-      .filter(Boolean);
-  };
-  // نختار أول مصدر فيه بيانات فعلية
-  let parts = pieces(s);
-  if (parts.length === 0) parts = pieces(b);
-  if (parts.length === 0) parts = pieces(d);
-
-  // إزالة التكرار (لو المدينة والمحافظة نفس الكلمة)
-  const seen = new Set();
-  const uniq = [];
-  for (const p of parts) {
-    const k = p.toLowerCase();
-    if (!seen.has(k)) { seen.add(k); uniq.push(p); }
-  }
-  let full = uniq.join(' - ');
-
-  if (!full) {
-    full = findNoteAttr(noteAttrs, ['address', 'عنوان', 'العنوان', 'المنطقة']) || '';
-  }
-  return full;
-}
-
-function extractOrderCustomer(order) {
-  const b = order.billing_address || {};
-  const s = order.shipping_address || {};
-  const c = order.customer || {};
-  const d = c.default_address || {};
-  const noteAttrs = order.note_attributes || [];
-
-  const customer =
-    s.name ||
-    b.name ||
-    (s.first_name ? `${s.first_name} ${s.last_name || ''}`.trim() : '') ||
-    (b.first_name ? `${b.first_name} ${b.last_name || ''}`.trim() : '') ||
-    d.name ||
-    (d.first_name ? `${d.first_name} ${d.last_name || ''}`.trim() : '') ||
-    (c.first_name ? `${c.first_name} ${c.last_name || ''}`.trim() : '') ||
-    findNoteAttr(noteAttrs, ['name', 'اسم', 'الاسم', 'customer']) ||
-    'عميل Shopify';
-
-  const phone = normalizePhone(
-    s.phone || b.phone || order.phone || c.phone || d.phone ||
-    findNoteAttr(noteAttrs, ['phone', 'mobile', 'موبايل', 'الموبايل', 'هاتف', 'رقم']) ||
-    ''
-  );
-
-  // العنوان الكامل: نجمّع كل حقول العنوان (تفاصيل + مدينة + منطقة/محافظة) بدل حقل واحد
-  const address = buildFullAddress(s, b, d, noteAttrs);
-
-  return { customer, phone, address };
-}
-
-async function supabaseRequest(method, path, body) {
-  const res = await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-      Prefer: 'return=minimal',
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) throw new Error(`Supabase ${method} failed: ${res.status} — ${await res.text()}`);
+// أوردر جديد: upsert عشان لو شوبيفاي كرر الإرسال (retry) ميطلعش خطأ تكرار
+async function insertOrder(order) {
+  const row = buildOrderRow(order);
+  await supabaseRequest('POST', 'orders?on_conflict=id', row, 'resolution=ignore-duplicates,return=minimal');
+  // لو كان موجود قبل كده (retry أو سباق مع orders/updated) نحدّث بياناته من شوبيفاي
+  await applyShopifyUpdate(order);
+  return row.id;
 }
 
 async function handler(req, res) {
@@ -169,82 +61,45 @@ async function handler(req, res) {
     return res.status(401).json({ error: 'Invalid HMAC' });
   }
 
-  let order;
-  try { order = JSON.parse(rawBody.toString('utf8')); }
+  let payload;
+  try { payload = JSON.parse(rawBody.toString('utf8')); }
   catch { return res.status(400).json({ error: 'Invalid JSON' }); }
 
   try {
     if (topic === 'orders/create') {
-      const lineItems = order.line_items || [];
-      const ship = (order.shipping_lines || [])[0] || {};
-      const orderId = order.name || `#${order.order_number}`;
-      const { customer, phone, address } = extractOrderCustomer(order);
+      const id = await insertOrder(payload);
+      console.log(`[webhook] created ${id}`);
 
-      const { itemText, totalQty } = buildItemSummary(order);
-      const totalPrice = computeProductPrice(order);
+    } else if (topic === 'orders/updated' || topic === 'orders/cancelled' || topic === 'orders/fulfilled' || topic === 'orders/partially_fulfilled') {
+      await applyShopifyUpdate(payload);
+      console.log(`[webhook] ${topic} ${payload.id}${isCancelled(payload) ? ' (cancelled)' : ''}`);
 
-      await supabaseRequest('POST', 'orders', {
-        id: orderId, customer, phone, address,
-        item: itemText, quantity: totalQty, productPrice: totalPrice,
-        shippingPrice: parseFloat(ship.price || 0),
-        notes: order.note || '',
-        status: 'جاري التحضير',
-        page: 'يمن دور ويب',
-        shopify_order_id: order.id,
-        shopify_store: 'yemen_door',
-        source: 'shopify',
-        date: new Date().toLocaleDateString('ar-EG'),
-      });
-      console.log(`[webhook] Inserted order ${orderId} (${lineItems.length} items)`);
+    } else if (topic === 'orders/edited') {
+      // الـ payload هنا ملخص التعديل بس — بنجيب الأوردر كامل بعد التعديل (المنتجات المحذوفة/المضافة)
+      const orderId = payload.order_edit && payload.order_edit.order_id;
+      if (orderId) {
+        const order = await fetchShopifyOrder(orderId);
+        if (order) await applyShopifyUpdate(order);
+        console.log(`[webhook] edited ${orderId}`);
+      }
 
     } else if (topic === 'orders/paid') {
-      await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'تم' });
-      console.log(`[webhook] paid ${order.id} → تم`);
+      // الدفع بعد الشحن = تحصيل → تم. الدفع أونلاين وقت الشراء ميغيّرش الحالة
+      // (كان بيحوّل الأوردر "تم" قبل ما يتجهز ويختفي من قائمة التحضير)
+      await supabaseRequest('PATCH', orderFilter(payload.id) + statusFilter({ in: ['الشحن'] }), { status: 'تم' });
+      console.log(`[webhook] paid ${payload.id}`);
 
-    } else if (topic === 'orders/fulfilled') {
-      await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'الشحن' });
-      console.log(`[webhook] fulfilled ${order.id} → الشحن`);
-
-    } else if (topic === 'orders/updated') {
-      const { customer, phone, address } = extractOrderCustomer(order);
-      const patch = {};
-
-      // تحديث الحالة
-      const tags = (order.tags || '').split(',').map(t => t.trim().toLowerCase());
-      if (tags.includes('collected')) patch.status = 'تم';
-      else if (tags.includes('cancelled_order') || order.cancelled_at || order.financial_status === 'refunded') patch.status = 'الغاء';
-      else if (order.fulfillment_status === 'fulfilled') patch.status = 'الشحن';
-
-      // تحديث بيانات العميل لو جت في الـ update (الأوردر بيتعمل قبل ما العميل يكمل بياناته)
-      if (customer && customer !== 'عميل Shopify') patch.customer = customer;
-      if (phone) patch.phone = phone;
-      if (address) patch.address = address;
-
-      // تحديث السعر والمنتجات لو الأوردر اتعدّل (تعديل سعر / خصم / تغيير المنتجات)
-      if ((order.line_items || []).length > 0) {
-        const ship = (order.shipping_lines || [])[0] || {};
-        const { itemText, totalQty } = buildItemSummary(order);
-        patch.item = itemText;
-        patch.quantity = totalQty;
-        patch.productPrice = computeProductPrice(order);
-        patch.shippingPrice = parseFloat(ship.price || 0);
-      }
-
-      if (Object.keys(patch).length > 0) {
-        await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, patch);
-        console.log(`[webhook] updated ${order.id}`, Object.keys(patch));
-      }
-
-    } else if (topic === 'orders/cancelled') {
-      await supabaseRequest('PATCH', `orders?shopify_order_id=eq.${order.id}&shopify_store=eq.yemen_door`, { status: 'الغاء' });
-      console.log(`[webhook] cancelled ${order.id}`);
+    } else if (topic === 'orders/delete') {
+      await supabaseRequest('PATCH', orderFilter(payload.id) + statusFilter({ notIn: ['الغاء'] }), { status: 'الغاء' });
+      console.log(`[webhook] deleted on Shopify ${payload.id} → الغاء`);
 
     } else {
       console.log(`[webhook] Ignored topic: ${topic}`);
     }
   } catch (err) {
-    console.error(`[webhook] Error: ${err.message}`);
-    return res.status(200).json({ ok: false, error: err.message });
+    console.error(`[webhook] ${topic} error: ${err.message}`);
+    // 500 → شوبيفاي يعيد المحاولة تلقائياً بدل ما التحديث يضيع
+    return res.status(500).json({ ok: false, error: err.message });
   }
 
   return res.status(200).json({ ok: true });

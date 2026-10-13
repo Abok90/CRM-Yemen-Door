@@ -1233,7 +1233,10 @@
             // الصفحات مبنية بمقاس A4 ثابت (794×1123px) عشان الـ PDF يطلع مظبوط حتى من الموبايل
             const printPickList = async () => {
                 if (selectedOrders.length === 0) return;
-                const toPrint = filteredOrders.filter(o => selectedOrders.includes(o.id));
+                const selected = filteredOrders.filter(o => selectedOrders.includes(o.id));
+                // الأوردرات الملغية مش بتتجهز — ما تدخلش قائمة التحضير
+                let toPrint = selected.filter(o => o.status !== 'الغاء');
+                let skippedCancelled = selected.length - toPrint.length;
 
                 // تنظيف اسم السطر من علامات الكمية والشرطات
                 const cleanLine = (s) => String(s || '')
@@ -1340,6 +1343,14 @@
                         notify('تعذّر الاتصال بشوبيفاي — هتتطبع من بيانات السيستم', 'warning');
                     }
                 }
+                // أوردر اتلغى على شوبيفاي ولسه ماوصلش السيستم، أو كل أصنافه اتشالت → يتشال من القائمة
+                toPrint = toPrint.filter(o => {
+                    const so = o.shopify_order_id ? shopifyById.get(String(o.shopify_order_id)) : null;
+                    if (so && (so.cancelled || !(so.items || []).length)) { skippedCancelled++; return false; }
+                    return true;
+                });
+                if (skippedCancelled > 0) notify(`تم استبعاد ${skippedCancelled} أوردر ملغي من قائمة التحضير`, 'warning');
+                if (toPrint.length === 0) { notify('كل الأوردرات المحددة ملغية — مفيش حاجة تتجهز', 'warning'); return; }
                 const storeName = (shop && shop.name) || 'Yemens Door';
                 const fromLines = (shop && shop.lines && shop.lines.length) ? shop.lines : [storeName];
 
@@ -1846,7 +1857,7 @@
                         if (result.inserted) parts.push(`أُضيف ${result.inserted}`);
                         if (result.updated) parts.push(`حُدّث ${result.updated}`);
                         if (result.merged) parts.push(`دُمج ${result.merged}`);
-                        notify(`✅ ${parts.join(' | ')} من أصل ${result.total} أوردر`, 'success');
+                        notify(`✅ ${parts.join(' | ') || 'كل الأوردرات محدّثة'} — من أصل ${result.total} أوردر`, 'success');
                         fetchOrdersData();
                     } else {
                         notify('خطأ في المزامنة: ' + result.error);
@@ -1854,6 +1865,42 @@
                 } catch (e) { notify('خطأ: ' + e.message); }
                 finally { setLoadingDB(false); }
             };
+
+            // مزامنة تلقائية في الخلفية مع شوبيفاي: أي إلغاء أو حذف منتج أو تعديل اتعمل هناك
+            // يوصل للسيستم حتى لو الـ webhook اتأخر أو ضاع. خفيفة: السيرفر بيحدّث بس اللي اتغيّر.
+            const autoSyncRef = useRef({ running: false, last: 0 });
+            const runShopifyAutoSync = useCallback(async () => {
+                if (!user || autoSyncRef.current.running || document.visibilityState === 'hidden') return;
+                autoSyncRef.current.running = true;
+                // أول مرة في الجلسة: آخر 3 أيام، وبعد كده آخر ساعتين (يغطي الفترة بين كل مزامنة والتانية)
+                const hours = autoSyncRef.current.last ? 2 : 72;
+                try {
+                    const { data: { session } } = await supabase.auth.getSession();
+                    if (!session) return;
+                    const res = await fetch('/api/shopify-sync', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-crm-auth': session.access_token },
+                        body: JSON.stringify({ mode: 'recent', hours }),
+                    });
+                    const result = await res.json().catch(() => ({}));
+                    if (result.ok) {
+                        autoSyncRef.current.last = Date.now();
+                        if (result.inserted || result.updated || result.merged) fetchOrdersData();
+                    }
+                } catch (_) { /* صامتة — هتتعاد في الدورة الجاية */ }
+                finally { autoSyncRef.current.running = false; }
+            }, [user, fetchOrdersData]);
+
+            useEffect(() => {
+                if (!user) return;
+                const first = setTimeout(runShopifyAutoSync, 3000);
+                const timer = setInterval(runShopifyAutoSync, 3 * 60 * 1000);
+                const onVisible = () => {
+                    if (document.visibilityState === 'visible' && Date.now() - autoSyncRef.current.last > 60 * 1000) runShopifyAutoSync();
+                };
+                document.addEventListener('visibilitychange', onVisible);
+                return () => { clearTimeout(first); clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
+            }, [user, runShopifyAutoSync]);
 
             // مزامنة كل المنتجات من شوبيفاي (بالصور) وتنزيلها في كتالوج السيستم
             const [productSyncStatus, setProductSyncStatus] = useState('');
@@ -2557,7 +2604,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.59</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.60</span>
                             </div>
                         </nav>
                     </aside>

@@ -1,3 +1,4 @@
+const { requireApprovedUser } = require('../lib/auth');
 const SHOPIFY_API_VERSION = '2024-01';
 
 async function supabaseRequest(method, path, body) {
@@ -81,12 +82,8 @@ async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
   // مصادقة: نفس أسلوب مزامنة الأوردرات
-  const authToken = req.headers['x-crm-auth'] || '';
-  if (!authToken) return res.status(401).json({ error: 'Unauthorized' });
-  const authRes = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
-    headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${authToken}` },
-  });
-  if (!authRes.ok) return res.status(401).json({ error: 'Invalid session' });
+  const auth = await requireApprovedUser(req);
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
 
   const storeUrl = process.env.SHOPIFY_STORE_URL;
   const token = process.env.SHOPIFY_ACCESS_TOKEN;
