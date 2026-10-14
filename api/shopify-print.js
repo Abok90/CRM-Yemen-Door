@@ -1,8 +1,11 @@
-const { buildFullAddress, buildRegion } = require('../lib/shopify-order');
+const { buildFullAddress, buildRegion, extractCustomer, SHOPIFY_API_VERSION } = require('../lib/shopify-order');
 const { requireApprovedUser } = require('../lib/auth');
-// بيانات الطباعة (قائمة التجهيز + الفواتير) من شوبيفاي مباشرة:
-// أسعار كل صنف، المتغير، صورة المنتج، العنوان الكامل وبيانات المتجر — بدل تخمينها من نص الأوردر.
-const SHOPIFY_GRAPHQL_VERSION = '2026-01';
+// بيانات الطباعة (قائمة التجهيز + الفواتير + شيت الشحن) من شوبيفاي مباشرة.
+//
+// الأصناف (أسعار/متغيرات/صور) من GraphQL، أما بيانات العميل والعنوان فمن REST:
+// على خطة Basic شوبيفاي بيرفض طلب بيانات العميل الشخصية في GraphQL بخطأ، لكن في REST
+// بيرجّع الأوردر عادي (مع إخفاء الحقول الشخصية). الحقول الإضافية (note_attributes)
+// وملاحظة الأوردر بيوصلوا في الحالتين، وغالباً فيهم العنوان التفصيلي من فورم الطلب.
 
 const QUERY = `query PrintOrders($ids: [ID!]!) {
   shop { name email contactEmail shopAddress { address1 address2 city province zip country phone } }
@@ -12,9 +15,6 @@ const QUERY = `query PrintOrders($ids: [ID!]!) {
       name
       createdAt
       cancelledAt
-      customAttributes { key value }
-      shippingAddress { name address1 address2 city province zip country phone }
-      billingAddress { name address1 address2 city province zip country phone }
       currentSubtotalPriceSet { shopMoney { amount } }
       totalShippingPriceSet { shopMoney { amount } }
       currentTotalTaxSet { shopMoney { amount } }
@@ -34,6 +34,8 @@ const QUERY = `query PrintOrders($ids: [ID!]!) {
   }
 }`;
 
+const REST_FIELDS = 'id,name,cancelled_at,phone,email,note,note_attributes,shipping_address,billing_address,customer';
+
 function readRawBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -43,25 +45,39 @@ function readRawBody(req) {
   });
 }
 
-// تحويل شكل GraphQL لشكل REST اللي بيفهمه lib/shopify-order
-const restAddr = (a) => a ? { address1: a.address1, address2: a.address2, city: a.city, province: a.province, zip: a.zip } : null;
-function addressFields(o) {
-  const s = restAddr(o.shippingAddress), b = restAddr(o.billingAddress);
-  const attrs = (o.customAttributes || []).map(x => ({ name: x.key, value: x.value }));
-  return { fullAddress: buildFullAddress(s, b, null, attrs), region: buildRegion(s, b, null, attrs) };
-}
-
 const money = (set) => {
   const n = parseFloat(set && set.shopMoney && set.shopMoney.amount);
   return isNaN(n) ? 0 : n;
 };
 
-const addressLines = (a) => {
-  if (!a) return [];
-  return [a.name, a.address1, a.address2, a.city, a.province, a.zip, a.country]
-    .map(x => (x == null ? '' : String(x)).trim())
-    .filter(x => x && x !== '-');
-};
+// تشخيص (بدون أي قيم شخصية): أنهي حقول عنوان فيها بيانات، وأسماء الحقول الإضافية
+function addressDiag(o) {
+  const keys = (a) => a ? Object.keys(a).filter(k => a[k] != null && String(a[k]).trim() !== '') : [];
+  const attrs = (o.note_attributes || []).map(a => `${a && a.name}(${a && a.value != null ? String(a.value).length : 0})`);
+  return `order=${o.name} shipping=[${keys(o.shipping_address)}] billing=[${keys(o.billing_address)}] ` +
+    `default=[${keys(o.customer && o.customer.default_address)}] note_attrs=[${attrs}] note_len=${(o.note || '').length}`;
+}
+
+async function fetchGraphql(storeUrl, token, ids) {
+  const r = await fetch(`https://${storeUrl}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
+    body: JSON.stringify({ query: QUERY, variables: { ids } }),
+  });
+  const data = await r.json().catch(() => ({}));
+  // أخطاء جزئية (حقل مرفوض) مش بتوقّع الطلب كله — نستخدم اللي رجع
+  if (!r.ok || !data.data) throw new Error(`Shopify ${r.status}: ${JSON.stringify(data.errors || data).slice(0, 300)}`);
+  if (data.errors) console.warn(`[print] GraphQL partial errors: ${JSON.stringify(data.errors).slice(0, 300)}`);
+  return data.data;
+}
+
+async function fetchRest(storeUrl, token, ids) {
+  const url = `https://${storeUrl}/admin/api/${SHOPIFY_API_VERSION}/orders.json?status=any&limit=250&ids=${ids.join(',')}&fields=${REST_FIELDS}`;
+  const r = await fetch(url, { headers: { 'X-Shopify-Access-Token': token } });
+  if (!r.ok) throw new Error(`Shopify REST ${r.status}`);
+  const data = await r.json().catch(() => ({}));
+  return data.orders || [];
+}
 
 async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
@@ -82,61 +98,82 @@ async function handler(req, res) {
 
   try {
     let shop = null;
-    const orders = [];
-    // nodes() بيقبل لحد 250 ID، بنقسمها 50 عشان تكلفة الاستعلام تفضل قليلة
-    for (let i = 0; i < ids.length; i += 50) {
-      const chunk = ids.slice(i, i + 50).map(id => `gid://shopify/Order/${id}`);
-      const r = await fetch(`https://${storeUrl}/admin/api/${SHOPIFY_GRAPHQL_VERSION}/graphql.json`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
-        body: JSON.stringify({ query: QUERY, variables: { ids: chunk } }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok || data.errors) throw new Error(`Shopify ${r.status}: ${JSON.stringify(data.errors || data).slice(0, 300)}`);
+    const byId = new Map();
 
-      if (!shop && data.data.shop) {
-        const s = data.data.shop;
-        const a = s.shopAddress || {};
-        shop = {
-          name: s.name,
-          email: s.contactEmail || s.email || '',
-          city: a.city || a.address1 || '',
-          lines: [s.name, a.address1, a.address2, a.city, a.province, a.zip, a.country, a.phone]
-            .map(x => (x == null ? '' : String(x)).trim()).filter(Boolean),
-        };
-      }
-
-      for (const o of data.data.nodes || []) {
-        if (!o || !o.legacyResourceId) continue;
-        const ship = o.shippingAddress || o.billingAddress;
-        orders.push({
-          shopifyOrderId: String(o.legacyResourceId),
+    // (1) العميل والعنوان من REST
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100);
+      const restOrders = await fetchRest(storeUrl, token, chunk);
+      if (i === 0 && restOrders[0]) console.log(`[print] addr-diag ${addressDiag(restOrders[0])}`);
+      for (const o of restOrders) {
+        const { customer, phone, address } = extractCustomer(o);
+        const s = o.shipping_address, b = o.billing_address, d = o.customer && o.customer.default_address;
+        byId.set(String(o.id), {
+          shopifyOrderId: String(o.id),
           name: o.name,
-          createdAt: o.createdAt,
-          cancelled: !!o.cancelledAt,
-          shipTo: addressLines(o.shippingAddress || o.billingAddress),
-          billTo: addressLines(o.billingAddress || o.shippingAddress),
-          phone: (ship && ship.phone) || '',
-          // العنوان الكامل + المنطقة (لشيت الشحن) — نفس منطق المزامنة بالظبط
-          ...addressFields(o),
-          subtotal: money(o.currentSubtotalPriceSet),
-          shipping: money(o.totalShippingPriceSet),
-          tax: money(o.currentTotalTaxSet),
-          total: money(o.currentTotalPriceSet),
-          paid: money(o.totalReceivedSet),
-          outstanding: money(o.totalOutstandingSet),
-          items: (o.lineItems.nodes || [])
-            .filter(li => li.currentQuantity > 0)
-            .map(li => ({
-              title: li.title,
-              variant: li.variantTitle && li.variantTitle !== 'Default Title' ? li.variantTitle : '',
-              qty: li.currentQuantity,
-              unitPrice: money(li.originalUnitPriceSet),
-              image: (li.image && li.image.url) || '',
-            })),
+          cancelled: !!o.cancelled_at,
+          customer: customer === 'عميل Shopify' ? '' : customer,
+          phone,
+          fullAddress: address,
+          region: buildRegion(s, b, d, o.note_attributes),
+          note: o.note || '',
+          items: [], subtotal: 0, shipping: 0, tax: 0, total: 0, paid: 0, outstanding: 0,
         });
       }
     }
+
+    // (2) الأصناف والمبالغ من GraphQL (لو فشل كله نكمل ببيانات REST بس)
+    try {
+      for (let i = 0; i < ids.length; i += 50) {
+        const chunk = ids.slice(i, i + 50).map(id => `gid://shopify/Order/${id}`);
+        const data = await fetchGraphql(storeUrl, token, chunk);
+        if (!shop && data.shop) {
+          const s = data.shop;
+          const a = s.shopAddress || {};
+          shop = {
+            name: s.name,
+            email: s.contactEmail || s.email || '',
+            city: a.city || a.address1 || '',
+            lines: [s.name, a.address1, a.address2, a.city, a.province, a.zip, a.country, a.phone]
+              .map(x => (x == null ? '' : String(x)).trim()).filter(Boolean),
+          };
+        }
+        for (const o of data.nodes || []) {
+          if (!o || !o.legacyResourceId) continue;
+          const row = byId.get(String(o.legacyResourceId)) || { shopifyOrderId: String(o.legacyResourceId), name: o.name, customer: '', phone: '', fullAddress: '', region: '', note: '' };
+          Object.assign(row, {
+            name: o.name || row.name,
+            createdAt: o.createdAt,
+            cancelled: row.cancelled || !!o.cancelledAt,
+            subtotal: money(o.currentSubtotalPriceSet),
+            shipping: money(o.totalShippingPriceSet),
+            tax: money(o.currentTotalTaxSet),
+            total: money(o.currentTotalPriceSet),
+            paid: money(o.totalReceivedSet),
+            outstanding: money(o.totalOutstandingSet),
+            items: ((o.lineItems && o.lineItems.nodes) || [])
+              .filter(li => li.currentQuantity > 0)
+              .map(li => ({
+                title: li.title,
+                variant: li.variantTitle && li.variantTitle !== 'Default Title' ? li.variantTitle : '',
+                qty: li.currentQuantity,
+                unitPrice: money(li.originalUnitPriceSet),
+                image: (li.image && li.image.url) || '',
+              })),
+          });
+          byId.set(String(o.legacyResourceId), row);
+        }
+      }
+    } catch (gqlErr) {
+      console.error(`[print] GraphQL failed, using REST data only: ${gqlErr.message}`);
+    }
+
+    const orders = Array.from(byId.values()).map(o => ({
+      ...o,
+      shipTo: [o.customer, o.fullAddress].filter(Boolean),
+      billTo: [o.customer, o.fullAddress].filter(Boolean),
+      hasItems: o.items.length > 0,
+    }));
     return res.status(200).json({ ok: true, shop, orders });
   } catch (err) {
     console.error(`[print] Error: ${err.message}`);

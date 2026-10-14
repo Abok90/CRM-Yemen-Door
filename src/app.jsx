@@ -1163,7 +1163,7 @@
                         });
                         const data = await r.json().catch(() => ({}));
                         if (data.ok) (data.orders || []).forEach(so => { if (so.fullAddress) liveAddr.set(String(so.shopifyOrderId), so); });
-                        else notify('تعذّر جلب العناوين من شوبيفاي — هيتستخدم العنوان المسجّل في السيستم', 'warning');
+                        else notify('تعذّر جلب العناوين من شوبيفاي (' + (data.error || r.status) + ') — هيتستخدم العنوان المسجّل في السيستم', 'warning');
                     } catch (_) { notify('تعذّر الاتصال بشوبيفاي — هيتستخدم العنوان المسجّل في السيستم', 'warning'); }
                 }
 
@@ -1386,7 +1386,7 @@
                 // أوردر اتلغى على شوبيفاي ولسه ماوصلش السيستم، أو كل أصنافه اتشالت → يتشال من القائمة
                 toPrint = toPrint.filter(o => {
                     const so = o.shopify_order_id ? shopifyById.get(String(o.shopify_order_id)) : null;
-                    if (so && (so.cancelled || !(so.items || []).length)) { skippedCancelled++; return false; }
+                    if (so && (so.cancelled || (Array.isArray(so.items) && !so.items.length))) { skippedCancelled++; return false; }
                     return true;
                 });
                 if (skippedCancelled > 0) notify(`تم استبعاد ${skippedCancelled} أوردر ملغي من قائمة التحضير`, 'warning');
@@ -1402,17 +1402,20 @@
                 };
                 const docs = toPrint.map(o => {
                     const so = o.shopify_order_id ? shopifyById.get(String(o.shopify_order_id)) : null;
-                    if (so) {
-                        return {
-                            name: so.name || o.id, date: fmtDate(so.createdAt),
-                            billTo: so.billTo, shipTo: so.shipTo, phone: toEnglishDigits(so.phone || o.phone || ''),
-                            items: so.items, hasPrices: true,
-                            subtotal: so.subtotal, tax: so.tax, shipping: so.shipping, total: so.total,
-                            paid: so.paid, outstanding: so.outstanding, notes: o.notes || '',
-                        };
-                    }
                     const prod = Number(o.productPrice) || 0;
                     const ship = Number(o.shippingPrice) || 0;
+                    if (so) {
+                        // الاسم/العنوان: من شوبيفاي لو متاحين، وإلا من السيستم. الأصناف من شوبيفاي لو وصلت.
+                        const soLines = [so.customer || o.customer, so.fullAddress || o.address].map(x => toEnglishDigits(String(x || '').trim())).filter(Boolean);
+                        const hasItems = Array.isArray(so.items) && so.items.length > 0;
+                        return {
+                            name: so.name || o.id, date: so.createdAt ? fmtDate(so.createdAt) : toEnglishDigits(String(o.date || '')),
+                            billTo: soLines, shipTo: soLines, phone: toEnglishDigits(so.phone || o.phone || ''),
+                            items: hasItems ? so.items : parseOrderItems(o), hasPrices: hasItems,
+                            subtotal: hasItems ? so.subtotal : prod, tax: hasItems ? so.tax : 0, shipping: hasItems ? so.shipping : ship, total: hasItems ? so.total : prod + ship,
+                            paid: hasItems ? so.paid : 0, outstanding: hasItems ? so.outstanding : prod + ship, notes: o.notes || '',
+                        };
+                    }
                     const lines = [o.customer, o.address].map(x => toEnglishDigits(String(x || '').trim())).filter(Boolean);
                     return {
                         name: toEnglishDigits(String(o.id)), date: toEnglishDigits(String(o.date || '')),
@@ -2645,7 +2648,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.62</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.63</span>
                             </div>
                         </nav>
                     </aside>

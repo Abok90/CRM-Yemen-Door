@@ -159,6 +159,13 @@ async function handler(req, res) {
       const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
       orders = await fetchOrders(storeUrl, token,
         `status=any&limit=250&updated_at_min=${encodeURIComponent(since)}&order=updated_at+desc`, 4);
+      // تشخيص (بدون قيم شخصية): أنهي حقول عنوان فيها بيانات وأسماء الحقول الإضافية
+      if (orders[0]) {
+        const o = orders[0];
+        const keys = (a) => a ? Object.keys(a).filter(k => a[k] != null && String(a[k]).trim() !== '') : [];
+        const attrs = (o.note_attributes || []).map(a => `${a && a.name}(${a && a.value != null ? String(a.value).length : 0})`);
+        console.log(`[sync] addr-diag order=${o.name} shipping=[${keys(o.shipping_address)}] billing=[${keys(o.billing_address)}] default=[${keys(o.customer && o.customer.default_address)}] note_attrs=[${attrs}] note_len=${(o.note || '').length}`);
+      }
     } else {
       const limit = Math.min(Number(body.limit) || 250, 250);
       orders = await fetchOrders(storeUrl, token, `status=any&limit=${limit}&order=created_at+desc`, 1);
