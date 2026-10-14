@@ -107,6 +107,11 @@ async function handler(req, res) {
           shipTo: addressLines(o.shippingAddress || o.billingAddress),
           billTo: addressLines(o.billingAddress || o.shippingAddress),
           phone: (ship && ship.phone) || '',
+          // حقول العنوان منفصلة (لشيت الشحن): تفاصيل + مدينة + محافظة
+          address: ship ? {
+            address1: ship.address1 || '', address2: ship.address2 || '',
+            city: ship.city || '', province: ship.province || '', zip: ship.zip || '',
+          } : null,
           subtotal: money(o.currentSubtotalPriceSet),
           shipping: money(o.totalShippingPriceSet),
           tax: money(o.currentTotalTaxSet),

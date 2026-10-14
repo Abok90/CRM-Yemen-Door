@@ -1144,17 +1144,68 @@
                 XLSX.writeFile(wb, `نسخة_احتياطية_طلبات_${new Date().toISOString().split('T')[0]}.xlsx`);
             };
 
-            const exportShippingCSV = () => {
+            const exportShippingCSV = async () => {
                 if (selectedOrders.length === 0) return;
                 const toExport = filteredOrders.filter(o => selectedOrders.includes(o.id));
-                const txt = (v) => ({ v: String(v||''), t: 's' });
+                const txt = (v) => ({ v: toEnglishDigits(String(v||'')), t: 's' });
+
+                // دمج أجزاء العنوان بدون تكرار (لو المدينة = المحافظة مثلاً)
+                const joinParts = (parts) => {
+                    const seen = new Set();
+                    return parts.map(x => String(x || '').trim()).filter(x => x && x !== '-')
+                        .filter(x => { const k = x.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; })
+                        .join(' - ');
+                };
+
+                // العنوان الكامل الحالي من شوبيفاي مباشرة (تفاصيل + مدينة + محافظة)
+                const liveAddr = new Map();
+                const shopifyIds = toExport.filter(o => o.shopify_order_id).map(o => String(o.shopify_order_id));
+                if (shopifyIds.length) {
+                    notify('⏳ جاري جلب العناوين الكاملة من شوبيفاي...', 'success');
+                    try {
+                        const { data: { session: sess } } = await supabase.auth.getSession();
+                        const r = await fetch('/api/shopify-print', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'x-crm-auth': sess?.access_token || '' },
+                            body: JSON.stringify({ ids: shopifyIds }),
+                        });
+                        const data = await r.json().catch(() => ({}));
+                        if (data.ok) (data.orders || []).forEach(so => { if (so.address) liveAddr.set(String(so.shopifyOrderId), so.address); });
+                        else notify('تعذّر جلب العناوين من شوبيفاي — هيتستخدم العنوان المسجّل في السيستم', 'warning');
+                    } catch (_) { notify('تعذّر الاتصال بشوبيفاي — هيتستخدم العنوان المسجّل في السيستم', 'warning'); }
+                }
+
+                const fixes = [];
+                const rows = toExport.map(o => {
+                    const a = o.shopify_order_id ? liveAddr.get(String(o.shopify_order_id)) : null;
+                    let fullAddress = String(o.address || '').trim();
+                    let region = fullAddress;
+                    if (a) {
+                        const fromShopify = joinParts([a.address1, a.address2, a.city, a.province]);
+                        if (fromShopify) {
+                            fullAddress = fromShopify;
+                            region = joinParts([a.city, a.province]) || fromShopify;
+                            // نصلّح العنوان في السيستم كمان لو كان ناقص
+                            if (fromShopify !== String(o.address || '').trim()) fixes.push({ id: o.id, address: fromShopify });
+                        }
+                    }
+                    return [txt(o.id), txt(o.page), txt(o.customer), txt(o.phone), txt((o.notes||'').replace(/\r?\n/g,' ')), txt(region), txt(fullAddress), txt(o.item), Number(o.quantity)||1, (Number(o.productPrice)||0)+(Number(o.shippingPrice)||0)];
+                });
+                const missing = rows.filter(r => !r[6].v).length;
+                if (missing) notify(`تنبيه: ${missing} أوردر من غير عنوان — راجعهم قبل ما تبعت الشيت`, 'warning');
+
+                if (fixes.length) {
+                    Promise.all(fixes.map(f => supabase.from('orders').update({ address: f.address }).eq('id', f.id))).catch(() => {});
+                    setOrders(prev => prev.map(o => { const f = fixes.find(x => x.id === o.id); return f ? { ...o, address: f.address } : o; }));
+                }
+
                 const wsData = [
                     ['كود التاجر', 'اسم الراسل على البوليصة', 'اسم المستلم', 'موبايل المستلم', 'ملاحظات', 'المنطقة', 'العنوان', 'محتوى الشحنة', 'الكمية', 'قيمة الشحنة'],
-                    ...toExport.map(o => [txt(o.id), txt(o.page), txt(o.customer), txt(o.phone), txt((o.notes||'').replace(/\r?\n/g,' ')), txt(o.address), txt(o.address), txt(o.item), Number(o.quantity)||1, (Number(o.productPrice)||0)+(Number(o.shippingPrice)||0)])
+                    ...rows
                 ];
                 const wb = XLSX.utils.book_new();
                 const ws = XLSX.utils.aoa_to_sheet(wsData);
-                ws['!cols'] = [12,20,20,15,25,20,25,25,8,12].map(w => ({wch:w}));
+                ws['!cols'] = [12,20,20,15,25,24,50,30,8,12].map(w => ({wch:w}));
                 ws['!views'] = [{ RTL: true }];
                 XLSX.utils.book_append_sheet(wb, ws, 'شيت الشحن');
                 XLSX.writeFile(wb, `شيت_شحن_${new Date().toISOString().split('T')[0]}.xlsx`);
@@ -2604,7 +2655,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.60</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.61</span>
                             </div>
                         </nav>
                     </aside>
