@@ -1,4 +1,4 @@
-const { buildFullAddress, buildRegion, extractCustomer, SHOPIFY_API_VERSION } = require('../lib/shopify-order');
+const { buildRegion, extractCustomer, hasDetailedAddress, SHOPIFY_API_VERSION } = require('../lib/shopify-order');
 const { requireApprovedUser } = require('../lib/auth');
 // بيانات الطباعة (قائمة التجهيز + الفواتير + شيت الشحن) من شوبيفاي مباشرة.
 //
@@ -114,7 +114,8 @@ async function handler(req, res) {
           cancelled: !!o.cancelled_at,
           customer: customer === 'عميل Shopify' ? '' : customer,
           phone,
-          fullAddress: address,
+          // العنوان المخفي (المحافظة بس) مايتبعتش — السيستم يستخدم العنوان الكامل اللي عنده
+          fullAddress: hasDetailedAddress(o) ? address : '',
           region: buildRegion(s, b, d, o.note_attributes),
           note: o.note || '',
           items: [], subtotal: 0, shipping: 0, tax: 0, total: 0, paid: 0, outstanding: 0,

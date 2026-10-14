@@ -71,6 +71,9 @@ async function handler(req, res) {
       console.log(`[webhook] created ${id}`);
 
     } else if (topic === 'orders/updated' || topic === 'orders/cancelled' || topic === 'orders/fulfilled' || topic === 'orders/partially_fulfilled') {
+      // تشخيص بدون قيم شخصية: هل الـ payload فيه تفاصيل العنوان؟
+      const sa = payload.shipping_address || {};
+      console.log(`[webhook] addr-diag ${payload.name} shipping=[${Object.keys(sa).filter(k => sa[k] != null && String(sa[k]).trim() !== '')}]`);
       await applyShopifyUpdate(payload);
       console.log(`[webhook] ${topic} ${payload.id}${isCancelled(payload) ? ' (cancelled)' : ''}`);
 

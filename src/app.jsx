@@ -1162,7 +1162,7 @@
                             body: JSON.stringify({ ids: shopifyIds }),
                         });
                         const data = await r.json().catch(() => ({}));
-                        if (data.ok) (data.orders || []).forEach(so => { if (so.fullAddress) liveAddr.set(String(so.shopifyOrderId), so); });
+                        if (data.ok) (data.orders || []).forEach(so => liveAddr.set(String(so.shopifyOrderId), so));
                         else notify('تعذّر جلب العناوين من شوبيفاي (' + (data.error || r.status) + ') — هيتستخدم العنوان المسجّل في السيستم', 'warning');
                     } catch (_) { notify('تعذّر الاتصال بشوبيفاي — هيتستخدم العنوان المسجّل في السيستم', 'warning'); }
                 }
@@ -1172,11 +1172,13 @@
                     const a = o.shopify_order_id ? liveAddr.get(String(o.shopify_order_id)) : null;
                     let fullAddress = String(o.address || '').trim();
                     let region = fullAddress;
-                    if (a && a.fullAddress) {
-                        fullAddress = a.fullAddress;
-                        region = a.region || a.fullAddress;
-                        // نصلّح العنوان في السيستم كمان لو كان ناقص
-                        if (a.fullAddress !== String(o.address || '').trim()) fixes.push({ id: o.id, address: a.fullAddress });
+                    if (a) {
+                        // شوبيفاي بيبعت العنوان التفصيلي بس لو متاح (مش مخفي)، والمنطقة (المحافظة) دايماً
+                        if (a.fullAddress) {
+                            fullAddress = a.fullAddress;
+                            if (a.fullAddress !== String(o.address || '').trim()) fixes.push({ id: o.id, address: a.fullAddress });
+                        }
+                        region = a.region || fullAddress;
                     }
                     return [txt(o.id), txt(o.page), txt(o.customer), txt(o.phone), txt((o.notes||'').replace(/\r?\n/g,' ')), txt(region), txt(fullAddress), txt(o.item), Number(o.quantity)||1, (Number(o.productPrice)||0)+(Number(o.shippingPrice)||0)];
                 });
@@ -2648,7 +2650,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.63</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.64</span>
                             </div>
                         </nav>
                     </aside>
