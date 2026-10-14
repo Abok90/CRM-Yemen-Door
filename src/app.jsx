@@ -1149,14 +1149,6 @@
                 const toExport = filteredOrders.filter(o => selectedOrders.includes(o.id));
                 const txt = (v) => ({ v: toEnglishDigits(String(v||'')), t: 's' });
 
-                // دمج أجزاء العنوان بدون تكرار (لو المدينة = المحافظة مثلاً)
-                const joinParts = (parts) => {
-                    const seen = new Set();
-                    return parts.map(x => String(x || '').trim()).filter(x => x && x !== '-')
-                        .filter(x => { const k = x.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; })
-                        .join(' - ');
-                };
-
                 // العنوان الكامل الحالي من شوبيفاي مباشرة (تفاصيل + مدينة + محافظة)
                 const liveAddr = new Map();
                 const shopifyIds = toExport.filter(o => o.shopify_order_id).map(o => String(o.shopify_order_id));
@@ -1170,7 +1162,7 @@
                             body: JSON.stringify({ ids: shopifyIds }),
                         });
                         const data = await r.json().catch(() => ({}));
-                        if (data.ok) (data.orders || []).forEach(so => { if (so.address) liveAddr.set(String(so.shopifyOrderId), so.address); });
+                        if (data.ok) (data.orders || []).forEach(so => { if (so.fullAddress) liveAddr.set(String(so.shopifyOrderId), so); });
                         else notify('تعذّر جلب العناوين من شوبيفاي — هيتستخدم العنوان المسجّل في السيستم', 'warning');
                     } catch (_) { notify('تعذّر الاتصال بشوبيفاي — هيتستخدم العنوان المسجّل في السيستم', 'warning'); }
                 }
@@ -1180,14 +1172,11 @@
                     const a = o.shopify_order_id ? liveAddr.get(String(o.shopify_order_id)) : null;
                     let fullAddress = String(o.address || '').trim();
                     let region = fullAddress;
-                    if (a) {
-                        const fromShopify = joinParts([a.address1, a.address2, a.city, a.province]);
-                        if (fromShopify) {
-                            fullAddress = fromShopify;
-                            region = joinParts([a.city, a.province]) || fromShopify;
-                            // نصلّح العنوان في السيستم كمان لو كان ناقص
-                            if (fromShopify !== String(o.address || '').trim()) fixes.push({ id: o.id, address: fromShopify });
-                        }
+                    if (a && a.fullAddress) {
+                        fullAddress = a.fullAddress;
+                        region = a.region || a.fullAddress;
+                        // نصلّح العنوان في السيستم كمان لو كان ناقص
+                        if (a.fullAddress !== String(o.address || '').trim()) fixes.push({ id: o.id, address: a.fullAddress });
                     }
                     return [txt(o.id), txt(o.page), txt(o.customer), txt(o.phone), txt((o.notes||'').replace(/\r?\n/g,' ')), txt(region), txt(fullAddress), txt(o.item), Number(o.quantity)||1, (Number(o.productPrice)||0)+(Number(o.shippingPrice)||0)];
                 });
@@ -1895,9 +1884,10 @@
                             `📱 customer.phone: ${c.phone || '❌ فاضي'}`,
                             `📱 billing.phone: ${b.phone || '❌ فاضي'}`,
                             `📱 shipping.phone: ${s.phone || '❌ فاضي'}`,
-                            `📍 shipping.address1: ${s.address1 || '❌ فاضي'}`,
-                            `📍 billing.address1: ${b.address1 || '❌ فاضي'}`,
+                            `📍 shipping: ${['address1','address2','company','city','province','zip'].map(k => `${k}=${s[k] || '—'}`).join(' | ')}`,
+                            `📍 billing: ${['address1','address2','company','city','province','zip'].map(k => `${k}=${b[k] || '—'}`).join(' | ')}`,
                             `📌 note_attributes: ${JSON.stringify(d.note_attributes || [])}`,
+                            `📝 note: ${d.note || '—'}`,
                         ].join('\n');
                         alert(info);
                         setLoadingDB(false);
@@ -2655,7 +2645,7 @@
                                 <button onClick={handleInstallClick} className="sidebar-nav-item text-green-400 hover:text-green-300 w-full"><IconDownload size={18} /> <span>تثبيت التطبيق 📱</span></button>
                             </div>
                             <div className="pt-3 pb-1 text-center">
-                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.61</span>
+                                <span className="text-[10px] text-slate-600 font-bold tracking-widest">v5.62</span>
                             </div>
                         </nav>
                     </aside>

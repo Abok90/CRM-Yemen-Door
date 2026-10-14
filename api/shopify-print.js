@@ -1,3 +1,4 @@
+const { buildFullAddress, buildRegion } = require('../lib/shopify-order');
 const { requireApprovedUser } = require('../lib/auth');
 // بيانات الطباعة (قائمة التجهيز + الفواتير) من شوبيفاي مباشرة:
 // أسعار كل صنف، المتغير، صورة المنتج، العنوان الكامل وبيانات المتجر — بدل تخمينها من نص الأوردر.
@@ -11,6 +12,7 @@ const QUERY = `query PrintOrders($ids: [ID!]!) {
       name
       createdAt
       cancelledAt
+      customAttributes { key value }
       shippingAddress { name address1 address2 city province zip country phone }
       billingAddress { name address1 address2 city province zip country phone }
       currentSubtotalPriceSet { shopMoney { amount } }
@@ -39,6 +41,14 @@ function readRawBody(req) {
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
+}
+
+// تحويل شكل GraphQL لشكل REST اللي بيفهمه lib/shopify-order
+const restAddr = (a) => a ? { address1: a.address1, address2: a.address2, city: a.city, province: a.province, zip: a.zip } : null;
+function addressFields(o) {
+  const s = restAddr(o.shippingAddress), b = restAddr(o.billingAddress);
+  const attrs = (o.customAttributes || []).map(x => ({ name: x.key, value: x.value }));
+  return { fullAddress: buildFullAddress(s, b, null, attrs), region: buildRegion(s, b, null, attrs) };
 }
 
 const money = (set) => {
@@ -107,11 +117,8 @@ async function handler(req, res) {
           shipTo: addressLines(o.shippingAddress || o.billingAddress),
           billTo: addressLines(o.billingAddress || o.shippingAddress),
           phone: (ship && ship.phone) || '',
-          // حقول العنوان منفصلة (لشيت الشحن): تفاصيل + مدينة + محافظة
-          address: ship ? {
-            address1: ship.address1 || '', address2: ship.address2 || '',
-            city: ship.city || '', province: ship.province || '', zip: ship.zip || '',
-          } : null,
+          // العنوان الكامل + المنطقة (لشيت الشحن) — نفس منطق المزامنة بالظبط
+          ...addressFields(o),
           subtotal: money(o.currentSubtotalPriceSet),
           shipping: money(o.totalShippingPriceSet),
           tax: money(o.currentTotalTaxSet),
